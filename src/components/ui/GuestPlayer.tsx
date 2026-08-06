@@ -22,6 +22,7 @@ export function GuestPlayer({ queue, currentSongIndex, isPlaying, serverProgress
   const playerRef = useRef<any>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [playerReady, setPlayerReady] = useState(false);
+  const [playerInstanceReady, setPlayerInstanceReady] = useState(false);
 
   const currentSong = queue[currentSongIndex];
 
@@ -47,9 +48,11 @@ export function GuestPlayer({ queue, currentSongIndex, isPlaying, serverProgress
 
     if (playerRef.current) {
       playerRef.current.destroy();
+      setPlayerInstanceReady(false);
     }
 
-    playerRef.current = new window.YT.Player(containerRef.current, {
+    // Create the player but do NOT rely on the constructor return value.
+    new window.YT.Player(containerRef.current, {
       height: '200',
       width: '200',
       videoId: currentSong?.url?.split('v=')[1]?.split('&')[0] || '',
@@ -61,7 +64,11 @@ export function GuestPlayer({ queue, currentSongIndex, isPlaying, serverProgress
         modestbranding: 1,
       },
       events: {
-        onReady: () => {
+        onReady: (event: any) => {
+          // Store canonical instance from event.target
+          playerRef.current = event.target as any;
+          setPlayerInstanceReady(true);
+
           if (isPlaying) {
             playerRef.current?.playVideo();
           }
@@ -81,18 +88,18 @@ export function GuestPlayer({ queue, currentSongIndex, isPlaying, serverProgress
 
   // Control playback
   useEffect(() => {
-    if (!playerRef.current || !playerReady) return;
+    if (!playerRef.current || !playerInstanceReady) return;
 
     if (isPlaying) {
-      playerRef.current.playVideo();
+      playerRef.current.playVideo?.();
     } else {
-      playerRef.current.pauseVideo();
+      playerRef.current.pauseVideo?.();
     }
-  }, [isPlaying, playerReady]);
+  }, [isPlaying, playerInstanceReady]);
 
   // Sync progress with server
   useEffect(() => {
-    if (!playerRef.current || !playerReady) return;
+    if (!playerRef.current || !playerInstanceReady) return;
 
     if (Math.abs(played - serverProgress) > 0.05) {
       setPlayed(serverProgress);
@@ -101,11 +108,11 @@ export function GuestPlayer({ queue, currentSongIndex, isPlaying, serverProgress
         playerRef.current.seekTo(serverProgress * duration, true);
       }
     }
-  }, [serverProgress, played, playerReady]);
+  }, [serverProgress, played, playerInstanceReady]);
 
   // Update local progress
   useEffect(() => {
-    if (!playerRef.current || !playerReady || !isPlaying) return;
+    if (!playerRef.current || !playerInstanceReady || !isPlaying) return;
 
     const interval = setInterval(() => {
       if (playerRef.current && playerRef.current.getCurrentTime && playerRef.current.getDuration) {
@@ -118,7 +125,7 @@ export function GuestPlayer({ queue, currentSongIndex, isPlaying, serverProgress
     }, 1000);
 
     return () => clearInterval(interval);
-  }, [isPlaying, playerReady]);
+  }, [isPlaying, playerInstanceReady]);
 
   return (
     <div className="w-full flex flex-col items-center bg-surface p-6 rounded-[24px] border border-border-subtle shadow-lg mt-6">

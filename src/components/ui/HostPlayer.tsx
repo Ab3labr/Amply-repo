@@ -22,177 +22,361 @@ interface HostPlayerProps {
 }
 
 export function HostPlayer({ code, queue, currentSongIndex, isPlaying, onPlay, onPause, onSeek }: HostPlayerProps) {
-  const [played, setPlayed] = useState(0);
-  const playerRef = useRef<any>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const [playerReady, setPlayerReady] = useState(false);
-  const [playerInstanceReady, setPlayerInstanceReady] = useState(false);
+  try {
+    console.log('[HostPlayer] Component render - Props:', { code, queueLength: queue.length, currentSongIndex, isPlaying });
 
-  // Debouncing refs for progress sync
-  const lastSyncTimeRef = useRef<number>(0);
-  const lastSyncedProgressRef = useRef<number>(0);
+    const [played, setPlayed] = useState(0);
+    const playerRef = useRef<any>(null);
+    const containerRef = useRef<HTMLDivElement>(null);
+    const [playerReady, setPlayerReady] = useState(false);
+    const [playerInstanceReady, setPlayerInstanceReady] = useState(false);
 
-  const currentSong = queue[currentSongIndex];
+    // Debouncing refs for progress sync
+    const lastSyncTimeRef = useRef<number>(0);
+    const lastSyncedProgressRef = useRef<number>(0);
+
+    const currentSong = queue[currentSongIndex];
+
+    // Component mount/unmount logging
+    useEffect(() => {
+      console.log('[HostPlayer] Component MOUNTED');
+      return () => {
+        console.log('[HostPlayer] Component UNMOUNTING');
+      };
+    }, []);
+
+    // Log state changes
+    useEffect(() => {
+      console.log('[HostPlayer] State changed:', {
+        played: played.toFixed(3),
+        playerReady,
+        playerInstanceReady,
+        isPlaying
+      });
+    }, [played, playerReady, playerInstanceReady, isPlaying]);
 
   // Load YouTube IFrame API
   useEffect(() => {
-    if (!window.YT) {
-      const tag = document.createElement('script');
-      tag.src = "https://www.youtube.com/iframe_api";
-      const firstScriptTag = document.getElementsByTagName('script')[0];
-      firstScriptTag.parentNode?.insertBefore(tag, firstScriptTag);
+    console.log('[HostPlayer] YouTube API loading useEffect executing');
+    try {
+      if (!window.YT) {
+        console.log('[HostPlayer] YouTube API not loaded, loading script');
+        const tag = document.createElement('script');
+        tag.src = "https://www.youtube.com/iframe_api";
+        const firstScriptTag = document.getElementsByTagName('script')[0];
+        firstScriptTag.parentNode?.insertBefore(tag, firstScriptTag);
 
-      window.onYouTubeIframeAPIReady = () => {
+        window.onYouTubeIframeAPIReady = () => {
+          try {
+            console.log('[HostPlayer] YouTube API ready callback fired');
+            setPlayerReady(true);
+          } catch (error) {
+            console.error('[HostPlayer] Error in YouTube API ready callback:', error);
+          }
+        };
+      } else {
+        console.log('[HostPlayer] YouTube API already loaded');
         setPlayerReady(true);
-      };
-    } else {
-      setPlayerReady(true);
+      }
+    } catch (error) {
+      console.error('[HostPlayer] Error in YouTube API loading useEffect:', error);
     }
   }, []);
 
   // Initialize player
   useEffect(() => {
-    if (!playerReady || !containerRef.current) return;
-
-    if (playerRef.current) {
-      playerRef.current.destroy();
-      setPlayerInstanceReady(false);
-    }
-
-    playerRef.current = new window.YT.Player(containerRef.current, {
-      height: '200',
-      width: '200',
-      videoId: currentSong?.url?.split('v=')[1]?.split('&')[0] || '',
-      playerVars: {
-        autoplay: 0,
-        controls: 0,
-        disablekb: 1,
-        fs: 0,
-        modestbranding: 1,
-      },
-      events: {
-        onReady: () => {
-          setPlayerInstanceReady(true);
-          if (isPlaying) {
-            playerRef.current?.playVideo();
-          }
-        },
-        onStateChange: (event: any) => {
-          if (event.data === window.YT.PlayerState.ENDED) {
-            handleNext();
-          }
-        },
-        onError: (event: any) => {
-          console.debug('YouTube error:', event.data);
-        },
-      },
+    console.log('[HostPlayer] Player initialization useEffect executing', {
+      playerReady,
+      hasContainer: !!containerRef.current,
+      songUrl: currentSong?.url,
+      hasExistingPlayer: !!playerRef.current
     });
 
-    return () => {
+    try {
+      if (!playerReady || !containerRef.current) return;
+
       if (playerRef.current) {
-        playerRef.current.destroy();
+        console.log('[HostPlayer] Destroying existing player instance');
+        try {
+          playerRef.current.destroy();
+        } catch (error) {
+          console.error('[HostPlayer] Error destroying player:', error);
+        }
+        setPlayerInstanceReady(false);
+      }
+
+      const videoId = currentSong?.url?.split('v=')[1]?.split('&')[0] || '';
+      console.log('[HostPlayer] Creating new YouTube player with videoId:', videoId);
+
+      // Create the player but do not use the constructor return value as the
+      // canonical instance. The YT API provides the canonical instance via
+      // `onReady` as `event.target`.
+      new window.YT.Player(containerRef.current, {
+        height: '200',
+        width: '200',
+        videoId: videoId,
+        playerVars: {
+          autoplay: 0,
+          controls: 0,
+          disablekb: 1,
+          fs: 0,
+          modestbranding: 1,
+        },
+        events: {
+          onReady: (event: any) => {
+            try {
+              console.log('[HostPlayer] YouTube onReady event fired');
+              // Store the canonical YT.Player instance from event.target
+              playerRef.current = event.target as any;
+              setPlayerInstanceReady(true);
+
+              if (isPlaying) {
+                console.log('[HostPlayer] Auto-playing video (isPlaying=true)');
+                try {
+                  playerRef.current?.playVideo();
+                } catch (error) {
+                  console.error('[HostPlayer] Error calling playVideo in onReady:', error);
+                }
+              }
+            } catch (error) {
+              console.error('[HostPlayer] Error in onReady callback:', error);
+            }
+          },
+          onStateChange: (event: any) => {
+            try {
+              console.log('[HostPlayer] YouTube onStateChange event:', event.data);
+              if (event.data === window.YT.PlayerState.ENDED) {
+                console.log('[HostPlayer] Song ended, calling handleNext');
+                handleNext();
+              }
+            } catch (error) {
+              console.error('[HostPlayer] Error in onStateChange callback:', error);
+            }
+          },
+          onError: (event: any) => {
+            console.error('[HostPlayer] YouTube onError event:', event.data);
+          },
+        },
+      });
+    } catch (error) {
+      console.error('[HostPlayer] Error in player initialization useEffect:', error);
+    }
+
+    return () => {
+      console.log('[HostPlayer] Player initialization useEffect cleanup - destroying player');
+      try {
+        if (playerRef.current) {
+          playerRef.current.destroy();
+        }
+      } catch (error) {
+        console.error('[HostPlayer] Error destroying player in cleanup:', error);
       }
     };
-  }, [playerReady, currentSong?.url, isPlaying]);
+  }, [playerReady, currentSong?.url]);
 
   // Control playback
   useEffect(() => {
-    if (!playerRef.current || !playerInstanceReady) return;
+    console.log('[HostPlayer] Playback control useEffect executing', {
+      hasPlayer: !!playerRef.current,
+      playerInstanceReady,
+      isPlaying
+    });
 
-    if (isPlaying) {
-      playerRef.current.playVideo?.();
-    } else {
-      playerRef.current.pauseVideo?.();
+    try {
+      if (!playerRef.current || !playerInstanceReady) return;
+
+      if (isPlaying) {
+        console.log('[HostPlayer] Calling playVideo()');
+        try {
+          playerRef.current.playVideo?.();
+        } catch (error) {
+          console.error('[HostPlayer] Error calling playVideo():', error);
+        }
+      } else {
+        console.log('[HostPlayer] Calling pauseVideo()');
+        try {
+          playerRef.current.pauseVideo?.();
+        } catch (error) {
+          console.error('[HostPlayer] Error calling pauseVideo():', error);
+        }
+      }
+    } catch (error) {
+      console.error('[HostPlayer] Error in playback control useEffect:', error);
     }
   }, [isPlaying, playerInstanceReady]);
 
   // Sync progress
   useEffect(() => {
-    if (!playerRef.current || !playerInstanceReady || !isPlaying) return;
+    console.log('[HostPlayer] Progress sync useEffect executing', {
+      hasPlayer: !!playerRef.current,
+      playerInstanceReady,
+      isPlaying,
+      code
+    });
 
-    const interval = setInterval(() => {
-      if (playerRef.current && playerRef.current.getCurrentTime && playerRef.current.getDuration) {
-        const currentTime = playerRef.current.getCurrentTime();
-        const duration = playerRef.current.getDuration();
-        if (duration > 0) {
-          const progress = currentTime / duration;
-          setPlayed(progress);
+    try {
+      if (!playerRef.current || !playerInstanceReady || !isPlaying) return;
 
-          const now = Date.now();
-          const timeSinceLastSync = now - lastSyncTimeRef.current;
-          const progressDrift = Math.abs(progress - lastSyncedProgressRef.current);
+      console.log('[HostPlayer] Starting progress sync interval (1000ms)');
+      const interval = setInterval(() => {
+        try {
+          if (playerRef.current && playerRef.current.getCurrentTime && playerRef.current.getDuration) {
+            const currentTime = playerRef.current.getCurrentTime();
+            const duration = playerRef.current.getDuration();
+            if (duration > 0) {
+              const progress = currentTime / duration;
+              console.log('[HostPlayer] Updating played state:', progress.toFixed(3));
+              setPlayed(progress);
 
-          if (timeSinceLastSync > 500 || progressDrift > 0.02) {
-            lastSyncTimeRef.current = now;
-            lastSyncedProgressRef.current = progress;
+              const now = Date.now();
+              const timeSinceLastSync = now - lastSyncTimeRef.current;
+              const progressDrift = Math.abs(progress - lastSyncedProgressRef.current);
 
-            fetch(`/api/rooms/${code}/player`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ progress }),
-            }).catch((error) => {
-              if (!(error instanceof Error) || error.name !== 'AbortError') {
-                console.error('Progress sync error:', error);
+              if (timeSinceLastSync > 500 || progressDrift > 0.02) {
+                lastSyncTimeRef.current = now;
+                lastSyncedProgressRef.current = progress;
+
+                console.log('[HostPlayer] Syncing progress to server:', progress.toFixed(3));
+                fetch(`/api/rooms/${code}/player`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ progress }),
+                }).catch((error) => {
+                  if (!(error instanceof Error) || error.name !== 'AbortError') {
+                    console.error('[HostPlayer] Progress sync error:', error);
+                  }
+                });
               }
-            });
+            }
           }
+        } catch (error) {
+          console.error('[HostPlayer] Error in progress sync interval:', error);
         }
-      }
-    }, 1000);
+      }, 1000);
 
-    return () => clearInterval(interval);
-  }, [isPlaying, playerReady, code]);
+      return () => {
+        console.log('[HostPlayer] Progress sync useEffect cleanup - clearing interval');
+        clearInterval(interval);
+      };
+    } catch (error) {
+      console.error('[HostPlayer] Error in progress sync useEffect:', error);
+      return () => {};
+    }
+  }, [isPlaying, playerInstanceReady, code]);
 
   const handlePlayPause = async () => {
+    console.log('[HostPlayer] handlePlayPause called', { isPlaying });
     try {
       if (isPlaying) {
-        onPause?.();
+        console.log('[HostPlayer] Calling onPause callback');
+        try {
+          onPause?.();
+        } catch (error) {
+          console.error('[HostPlayer] Error in onPause callback:', error);
+        }
       } else {
-        onPlay?.();
+        console.log('[HostPlayer] Calling onPlay callback');
+        try {
+          onPlay?.();
+        } catch (error) {
+          console.error('[HostPlayer] Error in onPlay callback:', error);
+        }
       }
 
+      console.log('[HostPlayer] Sending play/pause to server');
       await fetch(`/api/rooms/${code}/player`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: isPlaying ? "pause" : "play" }),
       });
     } catch (error) {
+      console.error('[HostPlayer] handlePlayPause error:', error);
       if (!(error instanceof Error) || error.name !== 'AbortError') {
-        console.error('Play/pause error:', error);
+        console.error('[HostPlayer] Play/pause error:', error);
       }
     }
   };
 
   const handleNext = async () => {
-    try {
-      const position = playerRef.current?.getCurrentTime?.() ?? 0;
-      onSeek?.(position);
+    console.log('[HostPlayer] handleNext called', {
+      hasPlayer: !!playerRef.current,
+      playerInstanceReady
+    });
 
+    // Defensive guard: don't proceed if player is being destroyed/recreated
+    if (!playerRef.current || !playerInstanceReady) {
+      console.warn('[HostPlayer] handleNext called but player not ready, skipping');
+      return;
+    }
+
+    try {
+      let position = 0;
+      try {
+        position = playerRef.current?.getCurrentTime?.() ?? 0;
+        console.log('[HostPlayer] Current position:', position);
+      } catch (error) {
+        console.error('[HostPlayer] Error getting current time:', error);
+      }
+
+      try {
+        onSeek?.(position);
+      } catch (error) {
+        console.error('[HostPlayer] Error in onSeek callback:', error);
+      }
+
+      console.log('[HostPlayer] Sending next action to server');
       await fetch(`/api/rooms/${code}/player`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "next" }),
       });
+      console.log('[HostPlayer] Next action completed successfully');
     } catch (error) {
+      console.error('[HostPlayer] handleNext error:', error);
       if (!(error instanceof Error) || error.name !== 'AbortError') {
-        console.error('Next error:', error);
+        console.error('[HostPlayer] Next error:', error);
       }
     }
   };
 
   const handlePrevious = async () => {
-    try {
-      const position = playerRef.current?.getCurrentTime?.() ?? 0;
-      onSeek?.(position);
+    console.log('[HostPlayer] handlePrevious called', {
+      hasPlayer: !!playerRef.current,
+      playerInstanceReady
+    });
 
+    // Defensive guard: don't proceed if player is being destroyed/recreated
+    if (!playerRef.current || !playerInstanceReady) {
+      console.warn('[HostPlayer] handlePrevious called but player not ready, skipping');
+      return;
+    }
+
+    try {
+      let position = 0;
+      try {
+        position = playerRef.current?.getCurrentTime?.() ?? 0;
+        console.log('[HostPlayer] Current position:', position);
+      } catch (error) {
+        console.error('[HostPlayer] Error getting current time:', error);
+      }
+
+      try {
+        onSeek?.(position);
+      } catch (error) {
+        console.error('[HostPlayer] Error in onSeek callback:', error);
+      }
+
+      console.log('[HostPlayer] Sending previous action to server');
       await fetch(`/api/rooms/${code}/player`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "previous" }),
       });
+      console.log('[HostPlayer] Previous action completed successfully');
     } catch (error) {
+      console.error('[HostPlayer] handlePrevious error:', error);
       if (!(error instanceof Error) || error.name !== 'AbortError') {
-        console.error('Previous error:', error);
+        console.error('[HostPlayer] Previous error:', error);
       }
     }
   };
@@ -252,5 +436,14 @@ export function HostPlayer({ code, queue, currentSongIndex, isPlaying, onPlay, o
         <p className="text-secondary text-center">No song in queue</p>
       )}
     </div>
-  );
+    );
+  } catch (error) {
+    console.error('[HostPlayer] Error in render:', error);
+    return (
+      <div className="w-full p-6 bg-red-900/20 border border-red-500/50 rounded-[24px]">
+        <h3 className="text-red-400 font-bold mb-2">HostPlayer Render Error</h3>
+        <p className="text-red-300 text-sm">{error instanceof Error ? error.message : String(error)}</p>
+      </div>
+    );
+  }
 }

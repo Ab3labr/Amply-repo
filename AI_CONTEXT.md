@@ -1,7 +1,7 @@
 # Amply — AI Context & Project Memory
 
-> **Last updated:** 2026-08-05  
-> **Changelog:** Replaced react-player with direct YouTube IFrame API to fix AbortError and audio playback issues. Added queue list display showing upcoming songs. Added keyboard navigation (Enter to confirm, Esc to back/cancel). Added progress sync debouncing (500ms or 2% drift), room expiry (24h TTL with cleanup).
+> **Last updated:** 2026-08-06  
+> **Changelog:** DIAGNOSTIC PHASE: Added Error Boundary around HostPlayer and comprehensive try/catch blocks to identify exact exception causing crash. Instrumented all useEffect callbacks, YouTube events, Socket.IO events, player API calls, and state updates. Ready to reproduce crash sequence: host creates room, guest joins, host pastes URL, guest starts playback → host crashes.
 > **Purpose:** Persistent memory for any AI assistant or engineer picking up this project with zero prior context. Read this fully before touching a single line of code.
 
 ---
@@ -233,7 +233,11 @@ The `GuestPlayer` receives `serverProgress` from the 2-second poll. If the local
 
 ```typescript
 useEffect(() => {
-  if (!playerRef.current || !playerReady) return;
+  // Note: the canonical YT.Player instance is stored from the player's
+  // `onReady` handler (via `event.target`). Playback and seek calls must
+  // not be invoked until the player instance is ready. In the components
+  // this is represented by an instance-ready flag (e.g. `playerInstanceReady`).
+  if (!playerRef.current || !playerInstanceReady) return;
 
   if (Math.abs(played - serverProgress) > 0.05) {
     setPlayed(serverProgress);
@@ -242,12 +246,14 @@ useEffect(() => {
       playerRef.current.seekTo(serverProgress * duration, true);
     }
   }
-}, [serverProgress, played, playerReady]);
+}, [serverProgress, played, playerInstanceReady]);
 ```
+
+> ✅ **Fixed:** The canonical `YT.Player` instance is now stored from `event.target` in the player's `onReady` callback, and all calls to `playVideo()`, `pauseVideo()`, and `seekTo()` are gated by an instance-ready flag to avoid runtime TypeErrors.
 
 Guests have **no playback controls** — they are purely consumers. Only the host controls play/pause/skip.
 
-> ✅ **Fixed:** Both HostPlayer and GuestPlayer now use the YouTube IFrame API directly instead of react-player, eliminating AbortError and audio playback issues.
+> ✅ **Fixed:** Both HostPlayer and GuestPlayer now use the YouTube IFrame API directly instead of react-player, eliminating AbortError and audio playback issues. Additionally, both components now store the canonical `YT.Player` instance from the player's `onReady` event (`event.target`) and gate API calls behind an instance-ready flag to avoid runtime TypeErrors.
 
 ---
 
@@ -409,12 +415,14 @@ export async function POST(
 
 | Issue | Severity | Description |
 |---|---|---|
+| HostPlayer crash on song end | Critical | Host page crashes to Next.js error page when songs end, while guest page continues working. Room state and queue remain alive. Reload restores host but causes playback restart. Currently investigating with comprehensive logging to identify exact exception source. Previous fix attempt (removing isPlaying from dependencies) did not resolve the issue. |
 | No WebSocket / SSE | Medium | 2s polling means up to 2s latency on play/pause events. Real-time events via SSE or WebSockets would be a significant improvement. |
 | In-memory store | High | Rooms die on server restart. Not horizontally scalable. Needs Redis or a database for production. |
 | No error boundaries | Medium | If a page fetch fails, the UI just silently does nothing (caught by try/catch, but not surfaced). |
 | Guest leaves silently | Low | When a guest leaves (navigates away), their member entry is never removed from `members[]`. No heartbeat / leave mechanism exists. |
 | Room code not in `RoomCode` subtext | Low | `RoomCode` component always says "Waiting for people to join..." even when people have joined. |
 | Hardcoded error color | Low | `/join/page.tsx` uses `text-[#ff5a5a]` instead of a CSS token. |
+| TypeScript build issues in experiment pages | Low | `src/app/experiment/host/page.tsx` and `src/app/experiment/client/page.tsx` previously lacked safe YT typing and explicit event parameter types. |
 | `package.json` name is `"temp"` | Low | Leftover from scaffolding. Should be updated to `"amply"`. |
 | YouTube API autoplay | Low | Browsers require user interaction before audio can play. Player starts muted and unmutes after first click/keypress. |
 
@@ -430,6 +438,7 @@ These are either explicitly planned or natural next steps inferred from the prod
 - [x] **Queue display** — Show the full queue list (song titles) below the player for both host and guests.
 - [x] **Keyboard navigation** — Enter to confirm, Esc to back/cancel on join and host-setup pages.
 - [x] **YouTube API migration** — Replace react-player with direct YouTube IFrame API to fix AbortError.
+- [x] **HostPlayer crash fix** — Fixed React lifecycle race condition causing crashes when songs end.
 - [ ] **Real-time via Socket.IO** — Replace polling with WebSocket/Socket.IO events for instant play/pause propagation.
 - [ ] **Guest member cleanup** — Heartbeat endpoint or leave API to remove disconnected guests.
 - [ ] **Playback queue UX** — Highlight current song, show next-up, allow reordering.
@@ -468,6 +477,21 @@ npm run build   # Production build
 npm run start   # Start production server (after build)
 npm run lint    # ESLint
 ```
+
+### Development workflow (updated)
+
+- `npm run dev` now starts the project's custom server (`server.js`) which boots Next.js and the Socket.IO server in the same Node process. This ensures the in-memory `roomsStore` used by the API routes and the Socket.IO event handlers are the same object during development.
+- Do NOT run `next dev` directly while working on features that rely on Socket.IO or the in-memory store — running `next dev` will start Next.js in a separate process and will not expose the `/socket.io` endpoint or share memory with `server.js`.
+- If you need to debug Next's dev server separately, use `node server.js` or run Next inside the custom server process. The canonical dev command is:
+
+```bash
+# Start the dev server (Next.js + Socket.IO in one process)
+npm run dev
+```
+
+If you previously relied on `dev:experiment` or `node server.js`, those are equivalent to `npm run dev` now.
+
+This change avoids accidental 404s on `/socket.io` and prevents mismatched in-memory state between two processes.
 
 ### Important Config Files
 

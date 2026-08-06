@@ -26,7 +26,7 @@ import { io, Socket } from "socket.io-client";
 
 declare global {
   interface Window {
-    YT: typeof YT;
+    YT: any;
     onYouTubeIframeAPIReady: () => void;
   }
 }
@@ -49,7 +49,7 @@ function ts() {
 
 export default function HostExperiment() {
   const socketRef = useRef<Socket | null>(null);
-  const playerRef = useRef<YT.Player | null>(null);
+  const playerRef = useRef<any>(null);
   const playerReadyRef = useRef(false);
   const pendingVideoIdRef = useRef<string | null>(null);
   const playAtTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -172,29 +172,30 @@ export default function HostExperiment() {
           modestbranding: 1,
         },
         events: {
-          onReady: (event) => {
+          onReady: (event: any) => {
             addLog(`✅ onReady fired  t=${ts()}`);
             event.target.setVolume(100);
             event.target.unMute();
             playerReadyRef.current = true;
-            playerRef.current = event.target as unknown as YT.Player;
+            playerRef.current = event.target;
 
             // If LOAD_VIDEO arrived before player was ready, cue now
             if (pendingVideoIdRef.current) {
               addLog(`▶️ Cueing pending videoId=${pendingVideoIdRef.current}`);
-              (event.target as unknown as YT.Player).cueVideoById(pendingVideoIdRef.current, 0);
+              event.target.cueVideoById(pendingVideoIdRef.current, 0);
               pendingVideoIdRef.current = null;
             }
           },
-          onStateChange: (event) => {
-            const stateName = {
+          onStateChange: (event: any) => {
+            const stateNameMap: Record<number, string> = {
               [-1]: "UNSTARTED",
               [0]: "ENDED",
               [1]: "PLAYING",
               [2]: "PAUSED",
               [3]: "BUFFERING",
               [5]: "CUED",
-            }[event.data] ?? `UNKNOWN(${event.data})`;
+            };
+            const stateName = stateNameMap[event.data] ?? `UNKNOWN(${event.data})`;
 
             addLog(`🔄 onStateChange → ${stateName}  t=${ts()}`);
 
@@ -204,7 +205,7 @@ export default function HostExperiment() {
               socketRef.current?.emit("CLIENT_READY", { readyAt: ts() });
             }
           },
-          onError: (event) => {
+          onError: (event: any) => {
             addLog(`❌ YT Player error code=${event.data}`);
           },
         },

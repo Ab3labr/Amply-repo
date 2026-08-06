@@ -35,6 +35,16 @@ This file summarizes the exact changes made to add minimal Socket.IO room suppor
 - Logged received play/pause/seek events to the guest console.
 - Preserved existing HTTP polling behavior.
 
+### `src/components/ui/HostPlayer.tsx`
+- Do NOT rely on the return value of `new YT.Player(...)` as the canonical player instance.
+- Store the canonical `YT.Player` instance inside the player's `onReady` handler via `event.target`.
+- Added an instance-ready flag and guarded calls to `playVideo()`, `pauseVideo()`, and `seekTo()` until the player is ready.
+
+### `src/components/ui/GuestPlayer.tsx`
+- Do NOT rely on the return value of `new YT.Player(...)` as the canonical player instance.
+- Store the canonical `YT.Player` instance inside the player's `onReady` handler via `event.target`.
+- Added an instance-ready flag and guarded calls to `playVideo()`, `pauseVideo()`, and `seekTo()` until the player is ready.
+
 ### `AI_CONTEXT.md`
 - Updated the synchronization model section to note that Socket.IO room events were added as a real-time overlay.
 - Updated the roadmap item from SSE to Socket.IO.
@@ -43,6 +53,11 @@ This file summarizes the exact changes made to add minimal Socket.IO room suppor
 - Existing app behavior and polling were preserved.
 - New Socket.IO layer is additive and does not replace polling yet.
 - Minimal test event is emitted by the host when the socket connects.
+
+## Development workflow change
+
+- The project's default development command (`npm run dev`) now starts the custom server (`server.js`) which boots Next.js and the Socket.IO server in the same Node.js process. This ensures the in-memory `roomsStore` is shared between Next.js API routes and Socket.IO handlers during development.
+- Removed the `dev:experiment` duplicate dev script to avoid accidentally starting `next dev` without Socket.IO. Use `npm run dev` to start the unified dev server.
 
 ## What was not changed
 - UI, layouts, styling, room creation, room joining, queue functionality, and YouTube IFrame playback were not modified.
