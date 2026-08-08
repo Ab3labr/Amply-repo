@@ -3,7 +3,7 @@
 import { Navbar } from "@/components/ui/Navbar";
 import { PageContainer } from "@/components/ui/PageContainer";
 import { ParticipantList } from "@/components/ui/ParticipantList";
-import { GuestPlayer } from "@/components/ui/GuestPlayer";
+import { GuestPlayer, type SocketCommand } from "@/components/ui/GuestPlayer";
 import { QueueInput } from "@/components/ui/QueueInput";
 import { RoomData } from "@/lib/store";
 import { motion } from "framer-motion";
@@ -17,6 +17,7 @@ export default function GuestRoomPage({ params }: { params: Promise<{ code: stri
   const code = resolvedParams.code;
   
   const [roomState, setRoomState] = useState<RoomData | null>(null);
+  const [socketCommand, setSocketCommand] = useState<SocketCommand | null>(null);
   const socketRef = useRef<Socket | null>(null);
   const router = useRouter();
 
@@ -39,10 +40,12 @@ export default function GuestRoomPage({ params }: { params: Promise<{ code: stri
 
     socket.on("PLAY", (payload: any) => {
       console.log("[GUEST SOCKET] PLAY received", payload);
+      setSocketCommand({ type: "play", at: Date.now() });
     });
 
     socket.on("PAUSE", (payload: any) => {
       console.log("[GUEST SOCKET] PAUSE received", payload);
+      setSocketCommand({ type: "pause", at: Date.now() });
     });
 
     socket.on("SEEK", (payload: any) => {
@@ -115,6 +118,7 @@ export default function GuestRoomPage({ params }: { params: Promise<{ code: stri
                 currentSongIndex={roomState.currentSongIndex} 
                 isPlaying={roomState.isPlaying} 
                 serverProgress={roomState.progress}
+                socketCommand={socketCommand}
               />
             </div>
           )}

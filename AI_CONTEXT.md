@@ -1,7 +1,7 @@
 # Amply — AI Context & Project Memory
 
-> **Last updated:** 2026-08-06  
-> **Changelog:** DIAGNOSTIC PHASE: Added Error Boundary around HostPlayer and comprehensive try/catch blocks to identify exact exception causing crash. Instrumented all useEffect callbacks, YouTube events, Socket.IO events, player API calls, and state updates. Ready to reproduce crash sequence: host creates room, guest joins, host pastes URL, guest starts playback → host crashes.
+> **Last updated:** 2026-08-08  
+> **Changelog:** (1) Socket.IO PLAY/PAUSE now functionally control the guest player. The guest page tracks the latest socket command (a `SocketCommand` object) and GuestPlayer executes `playVideo()`/`pauseVideo()` immediately on receipt. HTTP polling remains as the reconciliation/fallback for state. (2) **Player-generation guard added to HostPlayer and GuestPlayer** — a replaced player's late `onReady`/`onStateChange` can no longer re-arm the ready flag with a stale/destroyed instance (fixes the host crash on song change). (3) **Host optimistic play/pause** — the host's own player now reacts at click time instead of waiting for the 2s poll, removing the host/guest asymmetry that was yanking guests backward via drift correction. Build check passed.
 > **Purpose:** Persistent memory for any AI assistant or engineer picking up this project with zero prior context. Read this fully before touching a single line of code.
 
 ---
@@ -188,7 +188,9 @@ Every 2 seconds, both host and guest fetch `/api/rooms/:code` to get the full `R
 
 A new Socket.IO layer has been added to the server and to the host/guest room pages, using the existing room code as the socket room identifier. This lets the host emit room-specific real-time control events directly to every connected guest in the same room while keeping the existing polling model as a fallback.
 
-The first Socket.IO transport step replaces host play/pause control signaling with socket events. Host play and pause actions now emit `PLAY` and `PAUSE` events immediately, and the host also emits a `SEEK` event when track position changes. Guests receive and log these events, but they continue to use HTTP polling for state as a temporary fallback.
+The first Socket.IO transport step replaces host play/pause control signaling with socket events. Host play and pause actions now emit `PLAY` and `PAUSE` events immediately, and the host also emits a `SEEK` event when track position changes.
+
+**Guests now act on `PLAY` and `PAUSE`.** The guest room page receives the socket event, records the latest command as a `SocketCommand` (`{ type: "play" | "pause", at }`) in state, and passes it to `GuestPlayer`. `GuestPlayer` executes it immediately against the canonical YT player instance (`playVideo()` / `pauseVideo()`), gated by the instance-ready flag. HTTP polling remains the reconciliation/fallback mechanism for `isPlaying`, `currentSongIndex`, and `progress` — a poll round-trip will confirm or override the socket command if it disagrees. `SEEK` is still only logged (no guest seek handling yet).
 
 ### Host → Server: Progress Reporting
 The `HostPlayer` component uses the YouTube IFrame API directly. It polls the player's current position every 1 second and sends a POST to `/api/rooms/:code/player` with `{ progress: currentTime/duration }`. This writes the host's current playback fraction (0.0–1.0) to the store.
@@ -250,6 +252,18 @@ useEffect(() => {
 ```
 
 > ✅ **Fixed:** The canonical `YT.Player` instance is now stored from `event.target` in the player's `onReady` callback, and all calls to `playVideo()`, `pauseVideo()`, and `seekTo()` are gated by an instance-ready flag to avoid runtime TypeErrors.
+
+### Player Lifecycle: Generation Guard (critical)
+When a song change destroys a player and immediately creates a new one on the same container, the YouTube IFrame API can deliver the **old player's** `onReady` *after* the new player was created. That stale callback would store the destroyed instance in `playerRef.current` and re-arm `playerInstanceReady`, so the guard `!playerRef.current || !playerInstanceReady` passed while the ref pointed at a dead player — `playVideo()` then threw and the host crashed to the error boundary.
+
+Both `HostPlayer` and `GuestPlayer` now keep a `playerGenerationRef` counter:
+- Every player creation bumps the generation; each `onReady`/`onStateChange`/`onError` captures the generation it was created under and **ignores the event if it no longer matches** (`playerGenerationRef.current !== generation`).
+- Destroy/teardown paths bump the generation again, null `playerRef.current`, and set `playerInstanceReady(false)` synchronously.
+
+This makes `playerInstanceReady === true` ⇔ "the ref holds the current, live player", which is the invariant the guards were already relying on.
+
+### Host Optimistic Playback Control
+The host's `handlePlayPause` now drives its own player (`playVideo()`/`pauseVideo()`) **at click time**, before the poll can deliver the new `isPlaying` value. Rationale: guests react to the Socket.IO relay instantly, but the host's own player previously waited up to 2s for the poll. During that window guests ran ahead of the host's `serverProgress`, so the guest drift-correction effect (seek back if `|played - serverProgress| > 5%`) repeatedly yanked guests *backward* — the "5-6s before audio starts" symptom. With the host reacting immediately, host and guests stay aligned and the drift-correction no longer fights the socket playback.
 
 Guests have **no playback controls** — they are purely consumers. Only the host controls play/pause/skip.
 
@@ -415,8 +429,9 @@ export async function POST(
 
 | Issue | Severity | Description |
 |---|---|---|
-| HostPlayer crash on song end | Critical | Host page crashes to Next.js error page when songs end, while guest page continues working. Room state and queue remain alive. Reload restores host but causes playback restart. Currently investigating with comprehensive logging to identify exact exception source. Previous fix attempt (removing isPlaying from dependencies) did not resolve the issue. |
-| No WebSocket / SSE | Medium | 2s polling means up to 2s latency on play/pause events. Real-time events via SSE or WebSockets would be a significant improvement. |
+| Host refresh recovery | Fixed | Host page refresh now recovers playback position from server instead of restarting from beginning. HostPlayer fetches current room state on mount and seeks to server progress in YouTube onReady callback. |
+| HostPlayer crash on song end/change | Fixed | Host crashes when songs end/change because a replaced player's stale `onReady` re-armed the ready flag with a destroyed instance, then `playVideo()` threw. Fixed with the player-generation guard (see §5). |
+| No WebSocket / SSE | Medium | 2s polling means up to 2s latency on state changes. Play/pause now propagate near-instantly via Socket.IO; seek, queue, and full state still ride the 2s poll. A full real-time state push remains a future improvement. |
 | In-memory store | High | Rooms die on server restart. Not horizontally scalable. Needs Redis or a database for production. |
 | No error boundaries | Medium | If a page fetch fails, the UI just silently does nothing (caught by try/catch, but not surfaced). |
 | Guest leaves silently | Low | When a guest leaves (navigates away), their member entry is never removed from `members[]`. No heartbeat / leave mechanism exists. |
@@ -439,7 +454,8 @@ These are either explicitly planned or natural next steps inferred from the prod
 - [x] **Keyboard navigation** — Enter to confirm, Esc to back/cancel on join and host-setup pages.
 - [x] **YouTube API migration** — Replace react-player with direct YouTube IFrame API to fix AbortError.
 - [x] **HostPlayer crash fix** — Fixed React lifecycle race condition causing crashes when songs end.
-- [ ] **Real-time via Socket.IO** — Replace polling with WebSocket/Socket.IO events for instant play/pause propagation.
+- [x] **Real-time via Socket.IO (play/pause)** — Host `PLAY`/`PAUSE` socket events now drive the guest player immediately; polling kept as reconciliation.
+- [ ] **Real-time via Socket.IO (state push)** — Push seek/queue/state changes over socket events and reduce reliance on the 2s poll.
 - [ ] **Guest member cleanup** — Heartbeat endpoint or leave API to remove disconnected guests.
 - [ ] **Playback queue UX** — Highlight current song, show next-up, allow reordering.
 

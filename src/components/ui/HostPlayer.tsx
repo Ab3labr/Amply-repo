@@ -31,6 +31,12 @@ export function HostPlayer({ code, queue, currentSongIndex, isPlaying, onPlay, o
     const [playerReady, setPlayerReady] = useState(false);
     const [playerInstanceReady, setPlayerInstanceReady] = useState(false);
 
+    // Generation counter: every time a player is destroyed/recreated we bump it.
+    // Callbacks (onReady/onStateChange) from a replaced player can fire after the
+    // new player was created, so they must be ignored to avoid re-arming the
+    // player with a stale/dead instance.
+    const playerGenerationRef = useRef<number>(0);
+
     // Debouncing refs for progress sync
     const lastSyncTimeRef = useRef<number>(0);
     const lastSyncedProgressRef = useRef<number>(0);
@@ -95,6 +101,11 @@ export function HostPlayer({ code, queue, currentSongIndex, isPlaying, onPlay, o
     try {
       if (!playerReady || !containerRef.current) return;
 
+      // Bump the generation for this player creation. Any callback from a
+      // previous (destroyed) instance is now stale and must not drive the player.
+      const generation = playerGenerationRef.current + 1;
+      playerGenerationRef.current = generation;
+
       if (playerRef.current) {
         console.log('[HostPlayer] Destroying existing player instance');
         try {
@@ -102,6 +113,7 @@ export function HostPlayer({ code, queue, currentSongIndex, isPlaying, onPlay, o
         } catch (error) {
           console.error('[HostPlayer] Error destroying player:', error);
         }
+        playerRef.current = null;
         setPlayerInstanceReady(false);
       }
 
@@ -125,10 +137,32 @@ export function HostPlayer({ code, queue, currentSongIndex, isPlaying, onPlay, o
         events: {
           onReady: (event: any) => {
             try {
+              if (playerGenerationRef.current !== generation) {
+                console.log('[HostPlayer] Ignoring stale onReady from replaced player');
+                return;
+              }
               console.log('[HostPlayer] YouTube onReady event fired');
               // Store the canonical YT.Player instance from event.target
               playerRef.current = event.target as any;
               setPlayerInstanceReady(true);
+
+              // Recover playback position from server on mount
+              console.log('[HostPlayer] Recovering playback position from server');
+              fetch(`/api/rooms/${code}`)
+                .then(res => res.json())
+                .then(room => {
+                  if (room && room.progress > 0 && playerRef.current) {
+                    console.log('[HostPlayer] Seeking to server progress:', room.progress);
+                    const duration = playerRef.current.getDuration();
+                    if (duration > 0) {
+                      playerRef.current.seekTo(room.progress * duration, true);
+                      setPlayed(room.progress);
+                    }
+                  }
+                })
+                .catch(error => {
+                  console.error('[HostPlayer] Error fetching room state for recovery:', error);
+                });
 
               if (isPlaying) {
                 console.log('[HostPlayer] Auto-playing video (isPlaying=true)');
@@ -144,6 +178,10 @@ export function HostPlayer({ code, queue, currentSongIndex, isPlaying, onPlay, o
           },
           onStateChange: (event: any) => {
             try {
+              if (playerGenerationRef.current !== generation) {
+                console.log('[HostPlayer] Ignoring stale onStateChange from replaced player');
+                return;
+              }
               console.log('[HostPlayer] YouTube onStateChange event:', event.data);
               if (event.data === window.YT.PlayerState.ENDED) {
                 console.log('[HostPlayer] Song ended, calling handleNext');
@@ -154,6 +192,7 @@ export function HostPlayer({ code, queue, currentSongIndex, isPlaying, onPlay, o
             }
           },
           onError: (event: any) => {
+            if (playerGenerationRef.current !== generation) return;
             console.error('[HostPlayer] YouTube onError event:', event.data);
           },
         },
@@ -163,6 +202,9 @@ export function HostPlayer({ code, queue, currentSongIndex, isPlaying, onPlay, o
     }
 
     return () => {
+      // Bump the generation so any callbacks still pending from this player
+      // instance are invalidated before the new player is created.
+      playerGenerationRef.current += 1;
       console.log('[HostPlayer] Player initialization useEffect cleanup - destroying player');
       try {
         if (playerRef.current) {
@@ -171,6 +213,8 @@ export function HostPlayer({ code, queue, currentSongIndex, isPlaying, onPlay, o
       } catch (error) {
         console.error('[HostPlayer] Error destroying player in cleanup:', error);
       }
+      playerRef.current = null;
+      setPlayerInstanceReady(false);
     };
   }, [playerReady, currentSong?.url]);
 
@@ -267,6 +311,23 @@ export function HostPlayer({ code, queue, currentSongIndex, isPlaying, onPlay, o
   const handlePlayPause = async () => {
     console.log('[HostPlayer] handlePlayPause called', { isPlaying });
     try {
+      // Optimistically drive the host's own player at click time so the host
+      // reacts immediately instead of waiting for the next poll to deliver
+      // `isPlaying`. This keeps the host aligned with guests (who react to the
+      // socket relay instantly) and prevents drift-correction from yanking
+      // guests backward during the old poll lag.
+      if (playerRef.current && playerInstanceReady) {
+        try {
+          if (isPlaying) {
+            playerRef.current.pauseVideo?.();
+          } else {
+            playerRef.current.playVideo?.();
+          }
+        } catch (error) {
+          console.error('[HostPlayer] Error in optimistic play/pause:', error);
+        }
+      }
+
       if (isPlaying) {
         console.log('[HostPlayer] Calling onPause callback');
         try {

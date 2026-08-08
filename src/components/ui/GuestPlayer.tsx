@@ -10,19 +10,29 @@ declare global {
   }
 }
 
+export interface SocketCommand {
+  type: "play" | "pause";
+  at: number;
+}
+
 interface GuestPlayerProps {
   queue: QueueItem[];
   currentSongIndex: number;
   isPlaying: boolean;
   serverProgress: number;
+  socketCommand?: SocketCommand | null;
 }
 
-export function GuestPlayer({ queue, currentSongIndex, isPlaying, serverProgress }: GuestPlayerProps) {
+export function GuestPlayer({ queue, currentSongIndex, isPlaying, serverProgress, socketCommand }: GuestPlayerProps) {
   const [played, setPlayed] = useState(0);
   const playerRef = useRef<any>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [playerReady, setPlayerReady] = useState(false);
   const [playerInstanceReady, setPlayerInstanceReady] = useState(false);
+
+  // Generation counter: a replaced player's late callbacks (onReady/onError)
+  // must never re-arm the ready flag with a stale/dead instance.
+  const playerGenerationRef = useRef<number>(0);
 
   const currentSong = queue[currentSongIndex];
 
@@ -46,8 +56,12 @@ export function GuestPlayer({ queue, currentSongIndex, isPlaying, serverProgress
   useEffect(() => {
     if (!playerReady || !containerRef.current) return;
 
+    const generation = playerGenerationRef.current + 1;
+    playerGenerationRef.current = generation;
+
     if (playerRef.current) {
       playerRef.current.destroy();
+      playerRef.current = null;
       setPlayerInstanceReady(false);
     }
 
@@ -65,6 +79,7 @@ export function GuestPlayer({ queue, currentSongIndex, isPlaying, serverProgress
       },
       events: {
         onReady: (event: any) => {
+          if (playerGenerationRef.current !== generation) return;
           // Store canonical instance from event.target
           playerRef.current = event.target as any;
           setPlayerInstanceReady(true);
@@ -74,15 +89,19 @@ export function GuestPlayer({ queue, currentSongIndex, isPlaying, serverProgress
           }
         },
         onError: (event: any) => {
+          if (playerGenerationRef.current !== generation) return;
           console.debug('YouTube error:', event.data);
         },
       },
     });
 
     return () => {
+      playerGenerationRef.current += 1;
       if (playerRef.current) {
         playerRef.current.destroy();
       }
+      playerRef.current = null;
+      setPlayerInstanceReady(false);
     };
   }, [playerReady, currentSong?.url]);
 
@@ -96,6 +115,18 @@ export function GuestPlayer({ queue, currentSongIndex, isPlaying, serverProgress
       playerRef.current.pauseVideo?.();
     }
   }, [isPlaying, playerInstanceReady]);
+
+  // Execute host-issued play/pause commands relayed over Socket.IO.
+  // HTTP polling remains the reconciliation mechanism for state.
+  useEffect(() => {
+    if (!socketCommand || !playerRef.current || !playerInstanceReady) return;
+
+    if (socketCommand.type === "play") {
+      playerRef.current.playVideo?.();
+    } else {
+      playerRef.current.pauseVideo?.();
+    }
+  }, [socketCommand, playerInstanceReady]);
 
   // Sync progress with server
   useEffect(() => {
