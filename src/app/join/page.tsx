@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { Navbar } from "@/components/ui/Navbar";
 import { PageContainer } from "@/components/ui/PageContainer";
+import { diag } from "@/lib/sync-diag";
 import { motion } from "framer-motion";
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
@@ -68,11 +69,18 @@ export default function JoinPage() {
 
     if (!pendingRoom) return;
     setIsLoading(true);
+    const joinStart = performance.now();
+    const roomCode = pendingRoom.code;
+    diag("GUEST", roomCode, "JOIN", "request", {});
     try {
       const res = await fetch(`/api/rooms/${pendingRoom.code}/join`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name }),
+      });
+      diag("GUEST", roomCode, "JOIN", "response", {
+        status: res.status,
+        rttMs: +(performance.now() - joinStart).toFixed(2),
       });
       if (res.ok) {
         router.push(`/room/${pendingRoom.code}`);

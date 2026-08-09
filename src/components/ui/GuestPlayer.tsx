@@ -4,6 +4,7 @@ import { useState, useRef, useEffect } from "react";
 import { QueueItem } from "@/lib/store";
 import { getYouTubeVideoId } from "@/lib/youtube";
 import { NowPlayingStage } from "@/components/ui/NowPlayingStage";
+import { diag } from "@/lib/sync-diag";
 
 declare global {
   interface Window {
@@ -15,9 +16,11 @@ declare global {
 export interface SocketCommand {
   type: "play" | "pause";
   at: number;
+  seq?: number;
 }
 
 interface GuestPlayerProps {
+  roomCode: string;
   queue: QueueItem[];
   currentSongIndex: number;
   isPlaying: boolean;
@@ -26,7 +29,7 @@ interface GuestPlayerProps {
   hostName?: string;
 }
 
-export function GuestPlayer({ queue, currentSongIndex, isPlaying, serverProgress, socketCommand, hostName }: GuestPlayerProps) {
+export function GuestPlayer({ roomCode, queue, currentSongIndex, isPlaying, serverProgress, socketCommand, hostName }: GuestPlayerProps) {
   const [played, setPlayed] = useState(0);
   const [duration, setDuration] = useState(0);
   const playerRef = useRef<any>(null);
@@ -37,6 +40,7 @@ export function GuestPlayer({ queue, currentSongIndex, isPlaying, serverProgress
   // Generation counter: a replaced player's late callbacks (onReady/onError)
   // must never re-arm the ready flag with a stale/dead instance.
   const playerGenerationRef = useRef<number>(0);
+  const lastDiagPlayRef = useRef<boolean | null>(null);
 
   const currentSong = queue[currentSongIndex];
 
@@ -64,12 +68,14 @@ export function GuestPlayer({ queue, currentSongIndex, isPlaying, serverProgress
     playerGenerationRef.current = generation;
 
     if (playerRef.current) {
+      diag("GUEST", roomCode, "player", "destroy", {});
       playerRef.current.destroy();
       playerRef.current = null;
       setPlayerInstanceReady(false);
     }
 
     // Create the player but do NOT rely on the constructor return value.
+    diag("GUEST", roomCode, "player", "create", { index: currentSongIndex });
     new window.YT.Player(containerRef.current, {
       height: '200',
       width: '200',
@@ -87,6 +93,7 @@ export function GuestPlayer({ queue, currentSongIndex, isPlaying, serverProgress
           // Store canonical instance from event.target
           playerRef.current = event.target as any;
           setPlayerInstanceReady(true);
+          diag("GUEST", roomCode, "player", "onReady", { index: currentSongIndex });
 
           const readyDuration = playerRef.current?.getDuration?.();
           if (readyDuration && readyDuration > 0) {
@@ -94,7 +101,24 @@ export function GuestPlayer({ queue, currentSongIndex, isPlaying, serverProgress
           }
 
           if (isPlaying) {
+            diag("GUEST", roomCode, "PLAY", "autoplay-playVideo", { cause: "onReady" });
             playerRef.current?.playVideo();
+          }
+        },
+        onStateChange: (event: any) => {
+          if (playerGenerationRef.current !== generation) return;
+          diag("GUEST", roomCode, "yt-state", String(event.data), { index: currentSongIndex });
+          if (event.data === window.YT.PlayerState.PLAYING) {
+            diag("GUEST", roomCode, "PLAY", "yt-playing", {});
+            setTimeout(() => {
+              if (playerRef.current && playerGenerationRef.current === generation) {
+                diag("GUEST", roomCode, "PLAY", "currentTime-sample", {
+                  value: playerRef.current.getCurrentTime?.(),
+                });
+              }
+            }, 250);
+          } else if (event.data === window.YT.PlayerState.PAUSED) {
+            diag("GUEST", roomCode, "PAUSE", "yt-paused", {});
           }
         },
         onError: (event: any) => {
@@ -109,6 +133,7 @@ export function GuestPlayer({ queue, currentSongIndex, isPlaying, serverProgress
       if (playerRef.current) {
         playerRef.current.destroy();
       }
+      diag("GUEST", roomCode, "player", "destroy-cleanup", {});
       playerRef.current = null;
       setPlayerInstanceReady(false);
     };
@@ -119,8 +144,16 @@ export function GuestPlayer({ queue, currentSongIndex, isPlaying, serverProgress
     if (!playerRef.current || !playerInstanceReady) return;
 
     if (isPlaying) {
+      if (lastDiagPlayRef.current !== true) {
+        diag("GUEST", roomCode, "PLAY", "effect-playVideo", { cause: "poll" });
+      }
+      lastDiagPlayRef.current = true;
       playerRef.current.playVideo?.();
     } else {
+      if (lastDiagPlayRef.current !== false) {
+        diag("GUEST", roomCode, "PAUSE", "effect-pauseVideo", { cause: "poll" });
+      }
+      lastDiagPlayRef.current = false;
       playerRef.current.pauseVideo?.();
     }
   }, [isPlaying, playerInstanceReady]);
@@ -131,8 +164,10 @@ export function GuestPlayer({ queue, currentSongIndex, isPlaying, serverProgress
     if (!socketCommand || !playerRef.current || !playerInstanceReady) return;
 
     if (socketCommand.type === "play") {
+      diag("GUEST", roomCode, "PLAY", "playVideo()", { seq: socketCommand.seq });
       playerRef.current.playVideo?.();
     } else {
+      diag("GUEST", roomCode, "PAUSE", "pauseVideo()", { seq: socketCommand.seq });
       playerRef.current.pauseVideo?.();
     }
   }, [socketCommand, playerInstanceReady]);
@@ -145,6 +180,11 @@ export function GuestPlayer({ queue, currentSongIndex, isPlaying, serverProgress
       setPlayed(serverProgress);
       const duration = playerRef.current.getDuration();
       if (duration > 0) {
+        diag("GUEST", roomCode, "DRIFT", "hard-seek", {
+          from: played,
+          to: serverProgress,
+          delta: +(Math.abs(played - serverProgress) * 100).toFixed(2) + "%",
+        });
         playerRef.current.seekTo(serverProgress * duration, true);
       }
     }

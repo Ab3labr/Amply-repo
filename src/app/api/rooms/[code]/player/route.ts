@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { roomsStore } from "@/lib/store";
+import { diag } from "@/lib/sync-diag";
 
 type Params = Promise<{ code: string }>;
 
@@ -16,7 +17,15 @@ export async function POST(
       return NextResponse.json({ error: "Room does not exist" }, { status: 404 });
     }
 
-    const { action, progress } = await request.json();
+    const { action, progress, seq } = await request.json();
+
+    if (action) {
+      diag("SERVER", code, String(action).toUpperCase(), "state-update-receive", {
+        seq: seq ?? null,
+        progress: progress ?? null,
+        serverTs: Date.now(),
+      });
+    }
 
     if (action === "play") {
       room.isPlaying = true;
@@ -44,6 +53,16 @@ export async function POST(
 
     room.lastActivity = Date.now();
     roomsStore.set(code, room);
+
+    if (action) {
+      diag("SERVER", code, String(action).toUpperCase(), "state-applied", {
+        seq: seq ?? null,
+        progress: progress ?? null,
+        isPlaying: room.isPlaying,
+        currentSongIndex: room.currentSongIndex,
+        serverTs: Date.now(),
+      });
+    }
 
     return NextResponse.json({ success: true, room }, { status: 200 });
   } catch (error) {

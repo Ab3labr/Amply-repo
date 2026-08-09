@@ -4,6 +4,7 @@ import { useState, useRef, useEffect } from "react";
 import { QueueItem } from "@/lib/store";
 import { getYouTubeVideoId } from "@/lib/youtube";
 import { NowPlayingStage } from "@/components/ui/NowPlayingStage";
+import { diag, nextSeq } from "@/lib/sync-diag";
 
 declare global {
   interface Window {
@@ -17,9 +18,9 @@ interface HostPlayerProps {
   queue: QueueItem[];
   currentSongIndex: number;
   isPlaying: boolean;
-  onPlay?: () => void;
-  onPause?: () => void;
-  onSeek?: (position: number) => void;
+  onPlay?: (seq?: number) => void;
+  onPause?: (seq?: number) => void;
+  onSeek?: (position: number, seq?: number) => void;
 }
 
 export function HostPlayer({ code, queue, currentSongIndex, isPlaying, onPlay, onPause, onSeek }: HostPlayerProps) {
@@ -42,6 +43,7 @@ export function HostPlayer({ code, queue, currentSongIndex, isPlaying, onPlay, o
     // Debouncing refs for progress sync
     const lastSyncTimeRef = useRef<number>(0);
     const lastSyncedProgressRef = useRef<number>(0);
+    const lastDiagPlayRef = useRef<boolean | null>(null);
 
     const currentSong = queue[currentSongIndex];
 
@@ -110,6 +112,7 @@ export function HostPlayer({ code, queue, currentSongIndex, isPlaying, onPlay, o
 
       if (playerRef.current) {
         console.log('[HostPlayer] Destroying existing player instance');
+        diag("HOST", code, "player", "destroy", {});
         try {
           playerRef.current.destroy();
         } catch (error) {
@@ -121,6 +124,7 @@ export function HostPlayer({ code, queue, currentSongIndex, isPlaying, onPlay, o
 
       const videoId = getYouTubeVideoId(currentSong?.url || '');
       console.log('[HostPlayer] Creating new YouTube player with videoId:', videoId);
+      diag("HOST", code, "player", "create", { videoId, index: currentSongIndex });
 
       // Create the player but do not use the constructor return value as the
       // canonical instance. The YT API provides the canonical instance via
@@ -144,6 +148,7 @@ export function HostPlayer({ code, queue, currentSongIndex, isPlaying, onPlay, o
                 return;
               }
               console.log('[HostPlayer] YouTube onReady event fired');
+              diag("HOST", code, "player", "onReady", { index: currentSongIndex });
               // Store the canonical YT.Player instance from event.target
               playerRef.current = event.target as any;
               setPlayerInstanceReady(true);
@@ -174,6 +179,7 @@ export function HostPlayer({ code, queue, currentSongIndex, isPlaying, onPlay, o
 
               if (isPlaying) {
                 console.log('[HostPlayer] Auto-playing video (isPlaying=true)');
+                diag("HOST", code, "PLAY", "autoplay-playVideo", { cause: "onReady" });
                 try {
                   playerRef.current?.playVideo();
                 } catch (error) {
@@ -191,8 +197,10 @@ export function HostPlayer({ code, queue, currentSongIndex, isPlaying, onPlay, o
                 return;
               }
               console.log('[HostPlayer] YouTube onStateChange event:', event.data);
+              diag("HOST", code, "yt-state", String(event.data), { index: currentSongIndex });
               if (event.data === window.YT.PlayerState.ENDED) {
                 console.log('[HostPlayer] Song ended, calling handleNext');
+                diag("HOST", code, "ENDED", "yt-ended", { index: currentSongIndex });
                 handleNext();
               }
             } catch (error) {
@@ -221,6 +229,7 @@ export function HostPlayer({ code, queue, currentSongIndex, isPlaying, onPlay, o
       } catch (error) {
         console.error('[HostPlayer] Error destroying player in cleanup:', error);
       }
+      diag("HOST", code, "player", "destroy-cleanup", {});
       playerRef.current = null;
       setPlayerInstanceReady(false);
     };
@@ -239,6 +248,10 @@ export function HostPlayer({ code, queue, currentSongIndex, isPlaying, onPlay, o
 
       if (isPlaying) {
         console.log('[HostPlayer] Calling playVideo()');
+        if (lastDiagPlayRef.current !== true) {
+          diag("HOST", code, "PLAY", "effect-playVideo", { cause: "poll" });
+        }
+        lastDiagPlayRef.current = true;
         try {
           playerRef.current.playVideo?.();
         } catch (error) {
@@ -246,6 +259,10 @@ export function HostPlayer({ code, queue, currentSongIndex, isPlaying, onPlay, o
         }
       } else {
         console.log('[HostPlayer] Calling pauseVideo()');
+        if (lastDiagPlayRef.current !== false) {
+          diag("HOST", code, "PAUSE", "effect-pauseVideo", { cause: "poll" });
+        }
+        lastDiagPlayRef.current = false;
         try {
           playerRef.current.pauseVideo?.();
         } catch (error) {
@@ -290,6 +307,7 @@ export function HostPlayer({ code, queue, currentSongIndex, isPlaying, onPlay, o
                 lastSyncedProgressRef.current = progress;
 
                 console.log('[HostPlayer] Syncing progress to server:', progress.toFixed(3));
+                diag("HOST", code, "progress", "post", { progress });
                 fetch(`/api/rooms/${code}/player`, {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
@@ -319,6 +337,10 @@ export function HostPlayer({ code, queue, currentSongIndex, isPlaying, onPlay, o
 
   const handlePlayPause = async () => {
     console.log('[HostPlayer] handlePlayPause called', { isPlaying });
+    const seq = nextSeq();
+    const clickAt = performance.now();
+    const action = isPlaying ? "PAUSE" : "PLAY";
+    diag("HOST", code, action, "click", { seq });
     try {
       // Optimistically drive the host's own player at click time so the host
       // reacts immediately instead of waiting for the next poll to deliver
@@ -335,30 +357,35 @@ export function HostPlayer({ code, queue, currentSongIndex, isPlaying, onPlay, o
         } catch (error) {
           console.error('[HostPlayer] Error in optimistic play/pause:', error);
         }
+        diag("HOST", code, action, "local-call", {
+          seq,
+          dyMs: +(performance.now() - clickAt).toFixed(2),
+        });
       }
 
       if (isPlaying) {
         console.log('[HostPlayer] Calling onPause callback');
         try {
-          onPause?.();
+          onPause?.(seq);
         } catch (error) {
           console.error('[HostPlayer] Error in onPause callback:', error);
         }
       } else {
         console.log('[HostPlayer] Calling onPlay callback');
         try {
-          onPlay?.();
+          onPlay?.(seq);
         } catch (error) {
           console.error('[HostPlayer] Error in onPlay callback:', error);
         }
       }
 
       console.log('[HostPlayer] Sending play/pause to server');
-      await fetch(`/api/rooms/${code}/player`, {
+      const res = await fetch(`/api/rooms/${code}/player`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: isPlaying ? "pause" : "play" }),
+        body: JSON.stringify({ action: isPlaying ? "pause" : "play", seq }),
       });
+      diag("HOST", code, action, "api-response", { seq, status: res.status });
     } catch (error) {
       console.error('[HostPlayer] handlePlayPause error:', error);
       if (!(error instanceof Error) || error.name !== 'AbortError') {
@@ -372,6 +399,9 @@ export function HostPlayer({ code, queue, currentSongIndex, isPlaying, onPlay, o
     // through the existing onSeek callback (Socket.IO SEEK). No new sync path.
     if (!playerRef.current || !playerInstanceReady) return;
 
+    const seq = nextSeq();
+    const seekStart = performance.now();
+    diag("HOST", code, "SEEK", "click", { seq, fraction, played });
     let position = 0;
     try {
       const dur = playerRef.current.getDuration?.();
@@ -380,13 +410,14 @@ export function HostPlayer({ code, queue, currentSongIndex, isPlaying, onPlay, o
       position = clamped * dur;
       playerRef.current.seekTo(position, true);
       setPlayed(clamped);
+      diag("HOST", code, "SEEK", "seekTo()", { seq, position, dyMs: +(performance.now() - seekStart).toFixed(2) });
     } catch (error) {
       console.error('[HostPlayer] Error in handleSeek:', error);
       return;
     }
 
     try {
-      onSeek?.(position);
+      onSeek?.(position, seq);
     } catch (error) {
       console.error('[HostPlayer] Error calling onSeek in handleSeek:', error);
     }
@@ -397,10 +428,14 @@ export function HostPlayer({ code, queue, currentSongIndex, isPlaying, onPlay, o
       hasPlayer: !!playerRef.current,
       playerInstanceReady
     });
+    const seq = nextSeq();
+    const clickAt = performance.now();
+    diag("HOST", code, "NEXT", "click", { seq });
 
     // Defensive guard: don't proceed if player is being destroyed/recreated
     if (!playerRef.current || !playerInstanceReady) {
       console.warn('[HostPlayer] handleNext called but player not ready, skipping');
+      diag("HOST", code, "NEXT", "skip-not-ready", { seq });
       return;
     }
 
@@ -414,16 +449,21 @@ export function HostPlayer({ code, queue, currentSongIndex, isPlaying, onPlay, o
       }
 
       try {
-        onSeek?.(position);
+        onSeek?.(position, seq);
       } catch (error) {
         console.error('[HostPlayer] Error in onSeek callback:', error);
       }
 
       console.log('[HostPlayer] Sending next action to server');
-      await fetch(`/api/rooms/${code}/player`, {
+      const res = await fetch(`/api/rooms/${code}/player`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "next" }),
+        body: JSON.stringify({ action: "next", seq }),
+      });
+      diag("HOST", code, "NEXT", "api-response", {
+        seq,
+        status: res.status,
+        dyMs: +(performance.now() - clickAt).toFixed(2),
       });
       console.log('[HostPlayer] Next action completed successfully');
     } catch (error) {
@@ -439,10 +479,14 @@ export function HostPlayer({ code, queue, currentSongIndex, isPlaying, onPlay, o
       hasPlayer: !!playerRef.current,
       playerInstanceReady
     });
+    const seq = nextSeq();
+    const clickAt = performance.now();
+    diag("HOST", code, "PREVIOUS", "click", { seq });
 
     // Defensive guard: don't proceed if player is being destroyed/recreated
     if (!playerRef.current || !playerInstanceReady) {
       console.warn('[HostPlayer] handlePrevious called but player not ready, skipping');
+      diag("HOST", code, "PREVIOUS", "skip-not-ready", { seq });
       return;
     }
 
@@ -456,16 +500,21 @@ export function HostPlayer({ code, queue, currentSongIndex, isPlaying, onPlay, o
       }
 
       try {
-        onSeek?.(position);
+        onSeek?.(position, seq);
       } catch (error) {
         console.error('[HostPlayer] Error in onSeek callback:', error);
       }
 
       console.log('[HostPlayer] Sending previous action to server');
-      await fetch(`/api/rooms/${code}/player`, {
+      const res = await fetch(`/api/rooms/${code}/player`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "previous" }),
+        body: JSON.stringify({ action: "previous", seq }),
+      });
+      diag("HOST", code, "PREVIOUS", "api-response", {
+        seq,
+        status: res.status,
+        dyMs: +(performance.now() - clickAt).toFixed(2),
       });
       console.log('[HostPlayer] Previous action completed successfully');
     } catch (error) {

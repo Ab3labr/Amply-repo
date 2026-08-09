@@ -4,6 +4,7 @@
 const { createServer } = require('http');
 const { Server: SocketIOServer } = require('socket.io');
 const next = require('next');
+const { diag } = require('./sync-diag');
 
 const port = parseInt(process.env.PORT || '3000', 10);
 const dev = process.env.NODE_ENV !== 'production';
@@ -66,22 +67,31 @@ app.prepare().then(() => {
       socket.to(roomCode).emit('ROOM_SYNC', { roomCode, message, timestamp });
     });
 
-    socket.on('PLAY', ({ roomCode, timestamp }) => {
+    socket.on('PLAY', ({ roomCode, timestamp, seq }) => {
       if (!roomCode) return;
+      diag('SERVER', roomCode, 'PLAY', 'receive', { seq: seq ?? null, clientTs: timestamp ?? null });
       log(`PLAY  room=${roomCode}  timestamp=${timestamp}`);
-      socket.to(roomCode).emit('PLAY', { roomCode, timestamp });
+      const broadcastAt = Date.now();
+      socket.to(roomCode).emit('PLAY', { roomCode, timestamp, seq, serverSentAt: broadcastAt });
+      diag('SERVER', roomCode, 'PLAY', 'broadcast', { seq: seq ?? null, serverSentAt: broadcastAt });
     });
 
-    socket.on('PAUSE', ({ roomCode, timestamp }) => {
+    socket.on('PAUSE', ({ roomCode, timestamp, seq }) => {
       if (!roomCode) return;
+      diag('SERVER', roomCode, 'PAUSE', 'receive', { seq: seq ?? null, clientTs: timestamp ?? null });
       log(`PAUSE  room=${roomCode}  timestamp=${timestamp}`);
-      socket.to(roomCode).emit('PAUSE', { roomCode, timestamp });
+      const broadcastAt = Date.now();
+      socket.to(roomCode).emit('PAUSE', { roomCode, timestamp, seq, serverSentAt: broadcastAt });
+      diag('SERVER', roomCode, 'PAUSE', 'broadcast', { seq: seq ?? null, serverSentAt: broadcastAt });
     });
 
-    socket.on('SEEK', ({ roomCode, position, timestamp }) => {
+    socket.on('SEEK', ({ roomCode, position, timestamp, seq }) => {
       if (!roomCode) return;
+      diag('SERVER', roomCode, 'SEEK', 'receive', { seq: seq ?? null, position: position ?? null, clientTs: timestamp ?? null });
       log(`SEEK  room=${roomCode}  position=${position}  timestamp=${timestamp}`);
-      socket.to(roomCode).emit('SEEK', { roomCode, position, timestamp });
+      const broadcastAt = Date.now();
+      socket.to(roomCode).emit('SEEK', { roomCode, position, timestamp, seq, serverSentAt: broadcastAt });
+      diag('SERVER', roomCode, 'SEEK', 'broadcast', { seq: seq ?? null, position: position ?? null, serverSentAt: broadcastAt });
     });
 
     // ─── LOAD_VIDEO ───────────────────────────────────────────────────────

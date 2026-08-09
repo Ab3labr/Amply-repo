@@ -5,6 +5,7 @@ import { QueuePanel } from "@/components/ui/QueuePanel";
 import { Toast } from "@/components/ui/Toast";
 import { GuestPlayer, type SocketCommand } from "@/components/ui/GuestPlayer";
 import { RoomData } from "@/lib/store";
+import { diag } from "@/lib/sync-diag";
 import { useState, useEffect, useRef, use } from "react";
 import { useRouter } from "next/navigation";
 import { io, type Socket } from "socket.io-client";
@@ -16,6 +17,7 @@ export default function GuestRoomPage({ params }: { params: Promise<{ code: stri
   const [roomState, setRoomState] = useState<RoomData | null>(null);
   const [socketCommand, setSocketCommand] = useState<SocketCommand | null>(null);
   const socketRef = useRef<Socket | null>(null);
+  const prevIndexRef = useRef<number | null>(null);
   const router = useRouter();
 
   useEffect(() => {
@@ -37,16 +39,24 @@ export default function GuestRoomPage({ params }: { params: Promise<{ code: stri
 
     socket.on("PLAY", (payload: any) => {
       console.log("[GUEST SOCKET] PLAY received", payload);
-      setSocketCommand({ type: "play", at: Date.now() });
+      diag("GUEST", code, "PLAY", "receive", { seq: payload?.seq, clientTs: payload?.timestamp });
+      setSocketCommand({ type: "play", at: Date.now(), seq: payload?.seq });
     });
 
     socket.on("PAUSE", (payload: any) => {
       console.log("[GUEST SOCKET] PAUSE received", payload);
-      setSocketCommand({ type: "pause", at: Date.now() });
+      diag("GUEST", code, "PAUSE", "receive", { seq: payload?.seq, clientTs: payload?.timestamp });
+      setSocketCommand({ type: "pause", at: Date.now(), seq: payload?.seq });
     });
 
     socket.on("SEEK", (payload: any) => {
       console.log("[GUEST SOCKET] SEEK received", payload);
+      diag("GUEST", code, "SEEK", "receive", {
+        seq: payload?.seq,
+        position: payload?.position,
+        clientTs: payload?.timestamp,
+        action: "ignored-by-design",
+      });
     });
 
     return () => {
@@ -58,10 +68,23 @@ export default function GuestRoomPage({ params }: { params: Promise<{ code: stri
     let interval: NodeJS.Timeout;
     
     const fetchRoom = async () => {
+      const startedAt = performance.now();
       try {
         const res = await fetch(`/api/rooms/${code}`);
+        const receivedAt = performance.now();
+        diag("POLL", code, "room-state", "guest-response", {
+          rttMs: +(receivedAt - startedAt).toFixed(2),
+        });
         if (res.ok) {
           const data = await res.json();
+          if (prevIndexRef.current !== null && data.currentSongIndex !== prevIndexRef.current) {
+            diag("GUEST", code, "SONG_CHANGE", "poll-detected", {
+              from: prevIndexRef.current,
+              to: data.currentSongIndex,
+              isPlaying: data.isPlaying,
+            });
+          }
+          prevIndexRef.current = data.currentSongIndex;
           setRoomState(data);
         } else {
           router.push("/");
@@ -85,6 +108,7 @@ export default function GuestRoomPage({ params }: { params: Promise<{ code: stri
       <main className="grid w-full min-h-0 flex-1 grid-cols-1 lg:grid-cols-[minmax(0,1fr)_384px]">
         <div className="relative flex min-h-0 flex-col overflow-hidden">
           <GuestPlayer
+            roomCode={code}
             queue={roomState?.queue || []}
             currentSongIndex={roomState?.currentSongIndex || 0}
             isPlaying={roomState?.isPlaying || false}

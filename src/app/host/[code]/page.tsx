@@ -6,6 +6,7 @@ import { Toast } from "@/components/ui/Toast";
 import { HostPlayer } from "@/components/ui/HostPlayer";
 import { HostPlayerErrorBoundary } from "@/components/ui/HostPlayerErrorBoundary";
 import { RoomData } from "@/lib/store";
+import { diag, nextSeq } from "@/lib/sync-diag";
 import { useState, useEffect, useRef, use } from "react";
 import { useRouter } from "next/navigation";
 import { io, type Socket } from "socket.io-client";
@@ -17,6 +18,7 @@ export default function HostRoomPage({ params }: { params: Promise<{ code: strin
 
   const [roomState, setRoomState] = useState<RoomData | null>(null);
   const socketRef = useRef<Socket | null>(null);
+  const prevIndexRef = useRef<number | null>(null);
   const router = useRouter();
 
   // Component mount/unmount logging
@@ -92,31 +94,38 @@ export default function HostRoomPage({ params }: { params: Promise<{ code: strin
     };
   }, [code]);
 
-  const emitPlay = () => {
+  const emitPlay = (seq?: number) => {
     console.log('[HOST PAGE] emitPlay called');
     try {
-      socketRef.current?.emit("PLAY", { roomCode: code, timestamp: Date.now() });
+      const s = seq ?? nextSeq();
+      diag("HOST", code, "PLAY", "emit", { seq: s });
+      socketRef.current?.emit("PLAY", { roomCode: code, timestamp: Date.now(), seq: s });
     } catch (error) {
       console.error('[HOST PAGE] Error in emitPlay:', error);
     }
   };
 
-  const emitPause = () => {
+  const emitPause = (seq?: number) => {
     console.log('[HOST PAGE] emitPause called');
     try {
-      socketRef.current?.emit("PAUSE", { roomCode: code, timestamp: Date.now() });
+      const s = seq ?? nextSeq();
+      diag("HOST", code, "PAUSE", "emit", { seq: s });
+      socketRef.current?.emit("PAUSE", { roomCode: code, timestamp: Date.now(), seq: s });
     } catch (error) {
       console.error('[HOST PAGE] Error in emitPause:', error);
     }
   };
 
-  const emitSeek = (position: number) => {
+  const emitSeek = (position: number, seq?: number) => {
     console.log('[HOST PAGE] emitSeek called', { position });
     try {
+      const s = seq ?? nextSeq();
+      diag("HOST", code, "SEEK", "emit", { seq: s, position });
       socketRef.current?.emit("SEEK", {
         roomCode: code,
         position,
         timestamp: Date.now(),
+        seq: s,
       });
     } catch (error) {
       console.error('[HOST PAGE] Error in emitSeek:', error);
@@ -128,9 +137,14 @@ export default function HostRoomPage({ params }: { params: Promise<{ code: strin
     let interval: NodeJS.Timeout;
 
     const fetchRoom = async () => {
+      const startedAt = performance.now();
       try {
         console.log('[HOST PAGE] Fetching room state');
         const res = await fetch(`/api/rooms/${code}`);
+        const receivedAt = performance.now();
+        diag("POLL", code, "room-state", "host-response", {
+          rttMs: +(receivedAt - startedAt).toFixed(2),
+        });
         if (res.ok) {
           const data = await res.json();
           console.log('[HOST PAGE] Room state received:', {
@@ -139,6 +153,14 @@ export default function HostRoomPage({ params }: { params: Promise<{ code: strin
             isPlaying: data.isPlaying,
             progress: data.progress
           });
+          if (prevIndexRef.current !== null && data.currentSongIndex !== prevIndexRef.current) {
+            diag("HOST", code, "SONG_CHANGE", "poll-detected", {
+              from: prevIndexRef.current,
+              to: data.currentSongIndex,
+              isPlaying: data.isPlaying,
+            });
+          }
+          prevIndexRef.current = data.currentSongIndex;
           setRoomState(data);
         } else {
           console.error('[HOST PAGE] Room fetch failed, redirecting');
