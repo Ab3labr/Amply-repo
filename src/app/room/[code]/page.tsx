@@ -1,15 +1,12 @@
 "use client";
 
-import { Navbar } from "@/components/ui/Navbar";
-import { PageContainer } from "@/components/ui/PageContainer";
-import { ParticipantList } from "@/components/ui/ParticipantList";
+import { Topbar } from "@/components/ui/Topbar";
+import { QueuePanel } from "@/components/ui/QueuePanel";
+import { Toast } from "@/components/ui/Toast";
 import { GuestPlayer, type SocketCommand } from "@/components/ui/GuestPlayer";
-import { QueueInput } from "@/components/ui/QueueInput";
 import { RoomData } from "@/lib/store";
-import { motion } from "framer-motion";
 import { useState, useEffect, useRef, use } from "react";
 import { useRouter } from "next/navigation";
-import { LogOut } from "lucide-react";
 import { io, type Socket } from "socket.io-client";
 
 export default function GuestRoomPage({ params }: { params: Promise<{ code: string }> }) {
@@ -81,57 +78,29 @@ export default function GuestRoomPage({ params }: { params: Promise<{ code: stri
   }, [code, router]);
 
   return (
-    <PageContainer>
-      <div className="absolute top-6 left-6 z-20">
-        <button onClick={() => router.push("/")} className="text-secondary hover:text-primary flex items-center gap-2 transition-colors">
-          <LogOut size={20} />
-          <span>Leave</span>
-        </button>
-      </div>
+    <div className="app-shell flex min-h-dvh flex-col bg-background lg:h-dvh lg:overflow-hidden">
+      <Toast />
+      <Topbar code={code} members={roomState?.members || []} onLeave={() => router.push("/")} />
 
-      <Navbar />
+      <main className="grid w-full min-h-0 flex-1 grid-cols-1 lg:grid-cols-[minmax(0,1fr)_384px]">
+        <div className="relative flex min-h-0 flex-col overflow-hidden">
+          <GuestPlayer
+            queue={roomState?.queue || []}
+            currentSongIndex={roomState?.currentSongIndex || 0}
+            isPlaying={roomState?.isPlaying || false}
+            serverProgress={roomState?.progress ?? 0}
+            socketCommand={socketCommand}
+            hostName={roomState?.hostName}
+          />
+        </div>
 
-      <main className="flex-1 w-full max-w-[500px] flex flex-col items-center justify-start mt-8 mb-20 z-10 mx-auto">
-        <motion.div
-          initial={{ opacity: 0, scale: 0.98, y: 10 }}
-          animate={{ opacity: 1, scale: 1, y: 0 }}
-          transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
-          className="w-full flex flex-col items-center"
-        >
-          <div className="mb-8 w-full text-center">
-            <h1 className="text-[28px] font-bold text-primary mb-2 tracking-tight">
-              {roomState?.hostName ? `${roomState.hostName}'s Room` : "Loading..."}
-            </h1>
-            <p className="text-[15px] text-secondary">You are connected to the room.</p>
-          </div>
-
-          <div className="w-full mb-6">
-            <ParticipantList participants={roomState?.members || []} />
-          </div>
-          
-          {roomState?.queue && roomState.queue.length > 0 && (
-            <div className="w-full mt-2 border-t border-border-subtle pt-8">
-              <h2 className="text-lg font-semibold text-primary w-full text-center">Party Queue</h2>
-              <QueueInput code={code} />
-              <GuestPlayer 
-                queue={roomState.queue} 
-                currentSongIndex={roomState.currentSongIndex} 
-                isPlaying={roomState.isPlaying} 
-                serverProgress={roomState.progress}
-                socketCommand={socketCommand}
-              />
-            </div>
-          )}
-          
-          {roomState?.queue && roomState.queue.length === 0 && (
-            <div className="w-full mt-2 border-t border-border-subtle pt-8">
-              <h2 className="text-lg font-semibold text-primary w-full text-center mb-4">Party Queue</h2>
-              <QueueInput code={code} />
-            </div>
-          )}
-
-        </motion.div>
+        <QueuePanel
+          code={code}
+          queue={roomState?.queue || []}
+          currentSongIndex={roomState?.currentSongIndex || 0}
+          isPlaying={roomState?.isPlaying || false}
+        />
       </main>
-    </PageContainer>
+    </div>
   );
 }

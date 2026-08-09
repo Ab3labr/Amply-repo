@@ -4,6 +4,7 @@ export interface QueueItem {
   id: string;
   url: string;
   title: string;
+  thumbnailUrl: string;
 }
 
 export interface RoomData {

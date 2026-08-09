@@ -1,7 +1,7 @@
 # Amply — AI Context & Project Memory
 
-> **Last updated:** 2026-08-08  
-> **Changelog:** (1) Socket.IO PLAY/PAUSE now functionally control the guest player. The guest page tracks the latest socket command (a `SocketCommand` object) and GuestPlayer executes `playVideo()`/`pauseVideo()` immediately on receipt. HTTP polling remains as the reconciliation/fallback for state. (2) **Player-generation guard added to HostPlayer and GuestPlayer** — a replaced player's late `onReady`/`onStateChange` can no longer re-arm the ready flag with a stale/destroyed instance (fixes the host crash on song change). (3) **Host optimistic play/pause** — the host's own player now reacts at click time instead of waiting for the 2s poll, removing the host/guest asymmetry that was yanking guests backward via drift correction. Build check passed.
+> **Last updated:** 2026-08-09  
+> **Changelog:** (1) Socket.IO PLAY/PAUSE now functionally control the guest player. The guest page tracks the latest socket command (a `SocketCommand` object) and GuestPlayer executes `playVideo()`/`pauseVideo()` immediately on receipt. HTTP polling remains as the reconciliation/fallback for state. (2) **Player-generation guard added to HostPlayer and GuestPlayer** — a replaced player's late `onReady`/`onStateChange` can no longer re-arm the ready flag with a stale/destroyed instance (fixes the host crash on song change). (3) **Host optimistic play/pause** — the host's own player now reacts at click time instead of waiting for the 2s poll, removing the host/guest asymmetry that was yanking guests backward via drift correction. (4) **Typography + real album art (UI/UX redesign v0.2 — part 1)** — Added Fraunces via `next/font/google` (`--font-fraunces`), exposed as the `font-display` Tailwind token and applied **only** to the now-playing song title in HostPlayer/GuestPlayer; everything else stays Inter. Added `thumbnailUrl` to `QueueItem`, populated at queue-add time in the queue route from the existing video ID (`img.youtube.com/vi/{id}/maxresdefault.jpg`); a shared `TrackThumbnail` component renders the fallback chain (`maxresdefault → hqdefault → mqdefault`) on error and is used for both the Now Playing art and the queue-list rows. Video-ID parsing was centralized in `src/lib/youtube.ts` (handles `watch?v=`, `youtu.be/`, `/embed/`) and is now shared by the players and the queue route instead of being duplicated inline. Build passed; lint error count unchanged from baseline. (5) **OpenDesign "Now Playing" integration (UI/UX v0.3)** — `/host/[code]` and `/room/[code]` now render the `design-reference/opendesign.html` visual system (source of truth = OpenDesign VISUAL, Amply FUNCTIONAL), while preserving every existing sync/Socket.IO/polling/server behavior. New layout: 68px `Topbar` (BrandMark wordmark, `RoomCodeChip` + copy, `AvatarStack` with real members, leave), centered `NowPlayingStage` (spinning vinyl + 3D-tilt album art via `PlayerArt`, Fraunces track title, eyebrow "Now playing/paused", `ProgressBar` with time readouts, `PlaybackControls` host-only), and a 384px right-rail `QueuePanel` ("Up next", add-input, display-only rows with thumbnails + equalizer on current row, footer). `@theme` tokens now use the warm `oklch` OpenDesign palette (`--color-accent` = warm amber); keyframes (`amply-spin`,`amply-eq`) + effect primitives (vinyl/grain/stage glows/eyebrow/queue scrollbar) live in `globals.css @layer components`. Host-only keyboard shortcuts added (Space play/pause, ←/→ seek). **Synchronization changed: none** — HostPlayer/GuestPlayer only re-render around the new stage; each gained local `duration` state, and host `ProgressBar` seek reuses the existing `handleSeek` → `onSeek` Socket.IO SEEK path (no new POST). Queue rows are display-only. Build + smoke tests pass (create/join/queue/play/pause/next/previous/progress/pages/socket handshake).
 > **Purpose:** Persistent memory for any AI assistant or engineer picking up this project with zero prior context. Read this fully before touching a single line of code.
 
 ---
@@ -33,7 +33,7 @@ The product is intentionally frictionless:
 | Animations | **Framer Motion** | ^12 | Micro-animations, page transitions |
 | Icons | **lucide-react** | ^1.28 | Icon library |
 | Media player | **YouTube IFrame API** | Official | Direct YouTube API for stable audio playback without AbortError |
-| Font | **Inter** (Google Fonts) | via `next/font` | Loaded via CSS variable `--font-inter` |
+| Font | **Inter** (Google Fonts) | via `next/font` | Loaded via CSS variable `--font-inter`; **Fraunces** loaded as `--font-fraunces` (mapped to the `font-display` Tailwind token) for the now-playing song title only |
 
 > ⚠️ **Critical:** This project uses **Next.js 16** (not 13/14/15). Params in dynamic routes are now **Promises** — you must `use(params)` or `await params` before accessing `.code`. This is a breaking change from Next 13/14. Always read `node_modules/next/dist/docs/` for the exact API if unsure.
 
@@ -86,10 +86,24 @@ src/
 │       ├── ParticipantItem.tsx
 │       ├── ParticipantList.tsx
 │       ├── QueueInput.tsx
-│       └── RoomCode.tsx
+│       ├── RoomCode.tsx               # Legacy — room code is now the RoomCodeChip in the Topbar
+│       ├── TrackThumbnail.tsx        # Shared thumbnail <img> w/ maxres→hq→mq fallback
+│       ├── Topbar.tsx                # 68px room header: brand + room chip + avatar stack + leave
+│       ├── AvatarStack.tsx           # Initials avatars, ok-dot, "+N" overflow, people count
+│       ├── RoomCodeChip.tsx          # Compact room-code pill + copy button
+│       ├── BrandMark.tsx             # Circle-in-circle SVG wordmark glyph
+│       ├── PlayerArt.tsx             # Vinyl disc + 3D-tilt album card (framer-motion springs)
+│       ├── NowPlayingStage.tsx       # Full "Now Playing" stage: art, track meta, progress, controls
+│       ├── ProgressBar.tsx           # Time readouts + seekable (host) / read-only (guest) bar
+│       ├── PlaybackControls.tsx      # Prev / big play-pause / Next circular controls (host)
+│       ├── Equalizer.tsx             # 3-bar animated equalizer (current queue row)
+│       ├── QueuePanel.tsx            # Right "Up next" rail: header + add + scroll list + footer
+│       ├── QueueRow.tsx              # Display-only queue row: thumb + eq/index + title
+│       └── Toast.tsx                 # Global pill toast + `toast()` helper (custom event)
 │
 └── lib/
-    └── store.ts                   # In-memory server-side data store + type definitions
+    ├── store.ts                   # In-memory server-side data store + type definitions
+    └── youtube.ts                 # Video-ID extraction + thumbnail URL builder (single source)
 ```
 
 ### 3.2 Data Flow Overview
@@ -145,6 +159,7 @@ interface QueueItem {
   id: string;          // "song-{Date.now()}"
   url: string;         // YouTube URL
   title: string;       // Fetched from YouTube oEmbed API
+  thumbnailUrl: string; // https://img.youtube.com/vi/{videoId}/maxresdefault.jpg
 }
 
 interface RoomData {
@@ -267,6 +282,8 @@ The host's `handlePlayPause` now drives its own player (`playVideo()`/`pauseVide
 
 Guests have **no playback controls** — they are purely consumers. Only the host controls play/pause/skip.
 
+> ⚠️ **v0.3 UI redesign did not change any of the above.** The OpenDesign visual integration only re-rendered `HostPlayer`/`GuestPlayer` around the new `NowPlayingStage` components. Each player additionally tracks a local `duration` state (read from `getDuration()`) purely for the progress readout, and the new host `ProgressBar` calls `handleSeek(fraction)` which (1) `seekTo()`s the host's own player, (2) updates local `played`, and (3) calls the **pre-existing** `onSeek` → Socket.IO `SEEK` path. No new POST, no new socket events, no changes to the 2s poll or drift correction.
+
 > ✅ **Fixed:** Both HostPlayer and GuestPlayer now use the YouTube IFrame API directly instead of react-player, eliminating AbortError and audio playback issues. Additionally, both components now store the canonical `YT.Player` instance from the player's `onReady` event (`event.target`) and gate API calls behind an instance-ready flag to avoid runtime TypeErrors.
 
 ---
@@ -289,6 +306,8 @@ All routes are in `src/app/api/rooms/`.
 
 **Title resolution:** The queue endpoint calls the YouTube oEmbed API (`https://www.youtube.com/oembed?url={url}&format=json`) to resolve the title server-side. Falls back to `"YouTube Track"` silently on failure.
 
+**Thumbnail resolution:** The queue endpoint also derives `thumbnailUrl` (`https://img.youtube.com/vi/{videoId}/maxresdefault.jpg`) from the video ID at add time via `getYouTubeThumbnailUrl()` in `src/lib/youtube.ts`. Video IDs are extracted with `getYouTubeVideoId()` (handles `watch?v=`, `youtu.be/`, `/embed/`), which is also reused by HostPlayer/GuestPlayer for the IFrame player — one parsing routine, no duplication. Thumbnails flow back through `GET /api/rooms/:code` with every `QueueItem`; the frontend `TrackThumbnail` component falls back to `hqdefault.jpg` → `mqdefault.jpg` on image error.
+
 **Room code format:** 6 characters, uppercase `A-Z0-9`, generated randomly, collision-checked against existing rooms.
 
 ---
@@ -302,44 +321,63 @@ The project uses **Tailwind v4's `@theme` block** to define all design tokens as
 ```css
 @theme {
   --font-inter: 'Inter', sans-serif;
-  --color-background: #09090B;      /* Near-black page background */
-  --color-surface: #141418;         /* Elevated card/input background */
-  --color-primary: #FFFFFF;         /* Primary text */
-  --color-secondary: #8B8B95;       /* Muted text, icons */
-  --color-accent: #6D5DF6;          /* Purple — primary action color */
-  --color-success: #22C55E;         /* Green — online status dots */
-  --color-border-subtle: rgba(255, 255, 255, 0.08);  /* Hairline borders */
+  --font-display: var(--font-fraunces);     /* Fraunces — now-playing title only */
+  --color-background: oklch(15% 0.008 60);  /* Page background */
+  --color-background-2: oklch(18% 0.010 60);/* Elevated background / queue rail tint */
+  --color-surface: oklch(20% 0.010 60);     /* Cards, chips, inputs */
+  --color-surface-2: oklch(24% 0.012 60);   /* Hover / avatar fills */
+  --color-primary: oklch(94% 0.012 75);     /* Primary text */
+  --color-secondary: oklch(69% 0.015 60);   /* Muted text, icons */
+  --color-accent: oklch(72% 0.11 28);       /* Warm amber — primary action color (OpenDesign) */
+  --color-accent-hi: oklch(80% 0.09 30);    /* Accent hover / knobs */
+  --color-accent-dim: oklch(72% 0.11 28 / 0.14); /* Accent haze (selection/glow) */
+  --color-success: oklch(72% 0.15 150);     /* Green online dot */
+  --color-border-subtle: oklch(94% 0.012 75 / 0.09);  /* Hairline borders */
+  --color-border-strong: oklch(94% 0.012 75 / 0.16);  /* Stronger hairlines */
 }
 ```
+
+> ⚠️ The accent is now **warm amber**, not the old purple `#6D5DF6`. This single token change propagates to the landing `/`, `/host-setup`, and `/join` pages (they consume `bg-accent`, etc.).
 
 Use these as Tailwind utility classes: `bg-background`, `text-secondary`, `border-border-subtle`, `bg-accent`, etc.
 
 ### 7.2 Visual Language
 
 - **Dark mode only.** No light mode toggle exists or is planned.
-- **Radius:** Large, friendly corners. Buttons: `rounded-[20px]`. Cards/inputs: `rounded-[18px]`–`rounded-[24px]`.
+- **Radius:** Large, friendly corners. Circular control buttons (play `h-[72px]`, prev/next `h-[46px]`), pills (`rounded-full` for room chip / toast), cards `rounded-xl`–`2xl`, thumbnails `rounded-[4px]`.
 - **Shadows:**
-  - Buttons: `shadow-[0_4px_14px_0_rgba(109,93,246,0.39)]` (purple glow)
-  - Cards: `shadow-[0_8px_30px_rgb(0,0,0,0.12)]`
-  - Inputs: `shadow-[inset_0_2px_4px_rgba(0,0,0,0.2)]` (inset depth)
-- **Animations:** Framer Motion everywhere. Entry animations use `opacity: 0 → 1`, `y: 10 → 0`, `scale: 0.98 → 1` with the custom ease `[0.16, 1, 0.3, 1]` (a fast-out spring curve).
-- **Typography:** Inter, `antialiased`. Headlines at `32px`–`80px` bold. Body at `15px`–`17px` medium.
+  - Play button (accent glow): `shadow-[0_14px_30px_-12px_oklch(72%_0.11_28_/_0.45)]`
+  - Album card: `shadow-[inset_0_1px_0_rgba(255,255,255,0.08),0_30px_50px_-20px_rgba(0,0,0,0.75)]`
+  - Stage ambience: `.stage-glow` and `.bottom-glow` radial `oklch` gradients in `globals.css`
+- **Animations:** Framer Motion for album-card 3D pointer tilt (`useMotionValue` + `useSpring`), toast in/out, page transitions; CSS keyframes `amply-spin` (vinyl) and `amply-eq` (equalizer), both paused via `[data-paused="true"]`. Shared pop ease `cubic-bezier(0.22, 1, 0.36, 1)` (OpenDesign `--ease`).
+- **Typography:** Inter, `antialiased`, for all body/UI. **Fraunces** (`font-display`) used **exclusively** for the now-playing song title (weights 500/600 loaded; rendered at ~400 weight). Title clamps `clamp(26px, 4vw, 52px)`.
 
 ### 7.3 Component Conventions
 
 | Component | Responsibility |
 |---|---|
-| `PageContainer` | Full-height centering wrapper, max-width, padding. Use on every page. |
-| `Navbar` | Centered "Amply" wordmark that links to `/`. Use on every page. |
-| `Button` | Framer Motion button with `primary` (accent purple) and `secondary` (ghost) variants. |
-| `Input` | Styled text input with ring focus. Pass all native HTML input props through. |
+| `PageContainer` | Full-height centering wrapper, max-width, padding. Used by landing/setup/join. |
+| `Navbar` | Centered "Amply" wordmark that links to `/`. Used by landing/setup/join. |
+| `Button` | Framer Motion button with `primary` (accent) and `secondary` (ghost) variants. Landing/setup/join. |
+| `Input` | Styled text input with ring focus. Pass all native HTML input props through. Setup/join. |
 | `Divider` | 1px horizontal rule in `border-subtle`. |
-| `RoomCode` | Displays large letter room code with clipboard copy button. |
-| `ParticipantList` | Staggered animation list of `ParticipantItem` rows. |
-| `ParticipantItem` | Single member row — name, crown emoji for host, green online dot. |
-| `QueueInput` | YouTube URL text input with a `+` add button. Used in both host and guest views. |
-| `HostPlayer` | YouTube IFrame API player with play/pause/skip controls. Shows queue list. Makes API calls directly. Host-only. |
-| `GuestPlayer` | YouTube IFrame API player. Syncs to server state. Shows queue list. No controls. Guest-only. |
+| `RoomCode` | **Legacy** (room pages superseded by `RoomCodeChip` in the Topbar). |
+| `ParticipantList` / `ParticipantItem` | **Legacy** on room pages (superseded by `AvatarStack`); still exports the `Participant` type. |
+| `QueueInput` | Compact OpenDesign add-row (input + square `+` button) used inside `QueuePanel`; toasts "Added to queue"; Enter submits. |
+| `HostPlayer` | YouTube IFrame API player — **all playback/sync logic unchanged**. Now renders `<NowPlayingStage variant="host">` (controls + seekable bar). Owns local `played` + `duration`, generation-guard, progress debounce, optimistic play/pause, seek via `handleSeek` → existing `onSeek`. |
+| `GuestPlayer` | YouTube IFrame API player — **all sync logic unchanged**. Renders `<NowPlayingStage variant="guest">` (read-only, no controls). Consumes `serverProgress`, `socketCommand`, `hostName`. |
+| `Topbar` | 68px room header: BrandMark wordmark, `RoomCodeChip`, `AvatarStack`, leave button. |
+| `AvatarStack` | Initials avatars + green ok-dot + `+N` overflow + "N in the room" from real `members`. |
+| `RoomCodeChip` | Room-code pill + copy button (fires `Toast`). |
+| `BrandMark` | Circle-in-circle SVG wordmark glyph. |
+| `PlayerArt` | Spinning vinyl + album card (real thumbnail via `TrackThumbnail`) with framer-motion 3D tilt; keyed by song id for swap fade. |
+| `NowPlayingStage` | The full stage: `PlayerArt`, eyebrow label, Fraunces title, `ProgressBar`, `PlaybackControls` (host), host keyboard shortcuts. |
+| `ProgressBar` | Time readouts + bar; seekable on host (pointer capture → `onSeek`), read-only on guest. |
+| `PlaybackControls` | Prev / big play-pause / Next circular buttons (host only). |
+| `Equalizer` | 3-bar CSS equalizer; pauses via `data-paused`. |
+| `QueuePanel` | Right "Up next" rail: header + `QueueInput` + scrollable `QueueRow` list + footer. |
+| `QueueRow` | Display-only row: thumbnail, equalizer (current) or index, title. |
+| `Toast` | Global pill toast + `toast()` helper (`amply:toast` custom event). |
 
 ---
 
@@ -357,11 +395,10 @@ Use these as Tailwind utility classes: `bg-background`, `text-secondary`, `borde
 - **Keyboard navigation:** Enter key creates room, Esc key returns to home.
 
 ### `/host/[code]`
-- Polls `GET /api/rooms/:code` every **2 seconds**.
-- Shows: `RoomCode` (with copy button), `ParticipantList`, `QueueInput`, `HostPlayer`.
-- `HostPlayer` is always rendered (shows "No song in queue" when empty).
-- Shows queue list with upcoming songs below the player.
-- "Leave" button top-left using Lucide `LogOut` icon.
+- Polls `GET /api/rooms/:code` every **2 seconds** + Socket.IO (PLAY/PAUSE/SEEK relay). All unchanged.
+- Layout: `Topbar` (brand, room code chip, member avatars, leave) → two-column stage (`lg`+: main stage + 384px `QueuePanel`; below `lg` it stacks and the page scrolls).
+- Stage = `HostPlayer` (error-bounded) rendering `NowPlayingStage variant="host"` — vinyl art, track meta, seekable `ProgressBar`, `PlaybackControls`, host keyboard shortcuts (Space/←/→).
+- Empty queue shows "Nothing playing yet" state; `QueuePanel` shows an empty-prompt + add input.
 - `use(params)` required for the dynamic `[code]` param (Next.js 16 async params).
 
 ### `/join`
@@ -372,11 +409,10 @@ Use these as Tailwind utility classes: `bg-background`, `text-secondary`, `borde
 - **Keyboard navigation:** Enter key checks code / confirms join, Esc key cancels / returns to home.
 
 ### `/room/[code]`
-- Guest view. Polls every **2 seconds**.
-- Shows: host name heading, `ParticipantList`, `QueueInput`, `GuestPlayer`.
-- Both the "has queue" and "empty queue" states explicitly render `QueueInput` (guests can always add songs).
-- `GuestPlayer` receives `serverProgress` for drift correction.
-- Shows queue list with upcoming songs below the player.
+- Guest view. Polls every **2 seconds** + Socket.IO (PLAY/PAUSE). All unchanged.
+- Layout: `Topbar` → two-column stage: `GuestPlayer` (renders `NowPlayingStage variant="guest"`, read-only progress, no controls) + `QueuePanel` (guests can always add songs).
+- `GuestPlayer` receives `serverProgress` for drift correction and `socketCommand` for instant play/pause; `hostName` is shown as a subtitle under the title.
+- Queue rows display-only; current song gets the animated equalizer.
 
 ---
 
@@ -435,7 +471,7 @@ export async function POST(
 | In-memory store | High | Rooms die on server restart. Not horizontally scalable. Needs Redis or a database for production. |
 | No error boundaries | Medium | If a page fetch fails, the UI just silently does nothing (caught by try/catch, but not surfaced). |
 | Guest leaves silently | Low | When a guest leaves (navigates away), their member entry is never removed from `members[]`. No heartbeat / leave mechanism exists. |
-| Room code not in `RoomCode` subtext | Low | `RoomCode` component always says "Waiting for people to join..." even when people have joined. |
+| Room code in topbar chip | Fixed | The old "Waiting for people to join..." subtext is gone — `RoomCode` was superseded by the compact `RoomCodeChip` in the `Topbar` (v0.3 redesign). |
 | Hardcoded error color | Low | `/join/page.tsx` uses `text-[#ff5a5a]` instead of a CSS token. |
 | TypeScript build issues in experiment pages | Low | `src/app/experiment/host/page.tsx` and `src/app/experiment/client/page.tsx` previously lacked safe YT typing and explicit event parameter types. |
 | `package.json` name is `"temp"` | Low | Leftover from scaffolding. Should be updated to `"amply"`. |
@@ -457,14 +493,15 @@ These are either explicitly planned or natural next steps inferred from the prod
 - [x] **Real-time via Socket.IO (play/pause)** — Host `PLAY`/`PAUSE` socket events now drive the guest player immediately; polling kept as reconciliation.
 - [ ] **Real-time via Socket.IO (state push)** — Push seek/queue/state changes over socket events and reduce reliance on the 2s poll.
 - [ ] **Guest member cleanup** — Heartbeat endpoint or leave API to remove disconnected guests.
-- [ ] **Playback queue UX** — Highlight current song, show next-up, allow reordering.
+- [ ] **Playback queue UX** — Current-row highlight + equalizer done (v0.3); reordering and click-to-play remain.
+- [ ] **Host playback keyboard shortcuts** — Done in v0.3: Space play/pause, ←/→ seek (host only).
 
 ### Medium-Term
 - [ ] **Persistent store** — Redis or Postgres-backed room state for production scalability.
 - [ ] **Volume control** — Per-device volume slider (local only, not synced — each device controls its own).
 - [ ] **Mobile responsiveness polish** — Current layout works but hasn't been audited on mobile.
-- [ ] **Toast notifications** — When someone joins, show a subtle toast on the host's screen.
-- [ ] **Song thumbnail** — Show YouTube thumbnail in the player card.
+- [ ] **Toast notifications** — `Toast` + `toast()` helper shipped in v0.3 (used by copy-chip and queue-add); auto-toast when someone joins is not yet wired.
+- [x] **Song thumbnail** — Show YouTube thumbnail in the player card (real album art, `TrackThumbnail` w/ fallback chain; also in queue rows).
 
 ### Long-Term / Exploratory
 - [ ] **Multi-source support** — Spotify (via Web Playback SDK), SoundCloud, etc.
@@ -549,12 +586,25 @@ This change avoids accidental 404s on `/socket.io` and prevents mismatched in-me
 | [`src/app/api/rooms/[code]/join/route.ts`](src/app/api/rooms/%5Bcode%5D/join/route.ts) | `POST .../join` — add guest |
 | [`src/app/api/rooms/[code]/player/route.ts`](src/app/api/rooms/%5Bcode%5D/player/route.ts) | `POST .../player` — playback control + progress |
 | [`src/app/api/rooms/[code]/queue/route.ts`](src/app/api/rooms/%5Bcode%5D/queue/route.ts) | `POST .../queue` — add song |
-| [`src/components/ui/HostPlayer.tsx`](src/components/ui/HostPlayer.tsx) | Plays audio, sends progress, has controls |
-| [`src/components/ui/GuestPlayer.tsx`](src/components/ui/GuestPlayer.tsx) | Plays audio, no controls, syncs to server |
-| [`src/components/ui/QueueInput.tsx`](src/components/ui/QueueInput.tsx) | YouTube URL input, used by both host and guest |
-| [`src/components/ui/RoomCode.tsx`](src/components/ui/RoomCode.tsx) | Displays large room code + clipboard copy |
-| [`src/components/ui/ParticipantList.tsx`](src/components/ui/ParticipantList.tsx) | Staggered list of participants |
-| [`src/components/ui/ParticipantItem.tsx`](src/components/ui/ParticipantItem.tsx) | Single participant row; exports `Participant` type |
+| [`src/components/ui/HostPlayer.tsx`](src/components/ui/HostPlayer.tsx) | YouTube IFrame API player — **sync logic unchanged**; renders `NowPlayingStage variant="host"`; local `played`/`duration`; `handleSeek` → existing `onSeek` |
+| [`src/components/ui/GuestPlayer.tsx`](src/components/ui/GuestPlayer.tsx) | YouTube IFrame API player — **sync logic unchanged**; renders `NowPlayingStage variant="guest"` (read-only) |
+| [`src/components/ui/TrackThumbnail.tsx`](src/components/ui/TrackThumbnail.tsx) | Shared thumbnail `<img>` with `maxresdefault → hqdefault → mqdefault` fallback; used for Now Playing art and queue rows |
+| [`src/lib/youtube.ts`](src/lib/youtube.ts) | `getYouTubeVideoId()` + `getYouTubeThumbnailUrl()` + `THUMBNAIL_QUALITIES` — single source of truth for video-ID parsing |
+| [`src/components/ui/QueueInput.tsx`](src/components/ui/QueueInput.tsx) | Compact OpenDesign add-row input used inside `QueuePanel` (toasts "Added to queue", Enter submits) |
+| [`src/components/ui/Topbar.tsx`](src/components/ui/Topbar.tsx) | 68px room header: brand mark + room chip + avatar stack + leave |
+| [`src/components/ui/AvatarStack.tsx`](src/components/ui/AvatarStack.tsx) | Initials avatars + ok-dot + `+N` + people count (real members) |
+| [`src/components/ui/RoomCodeChip.tsx`](src/components/ui/RoomCodeChip.tsx) | Room-code pill + copy button |
+| [`src/components/ui/BrandMark.tsx`](src/components/ui/BrandMark.tsx) | Circle-in-circle SVG wordmark glyph |
+| [`src/components/ui/PlayerArt.tsx`](src/components/ui/PlayerArt.tsx) | Vinyl disc + 3D-tilt album card (framer-motion springs) |
+| [`src/components/ui/NowPlayingStage.tsx`](src/components/ui/NowPlayingStage.tsx) | Full Now Playing stage + host keyboard shortcuts |
+| [`src/components/ui/ProgressBar.tsx`](src/components/ui/ProgressBar.tsx) | Time readouts + seekable/read-only progress bar |
+| [`src/components/ui/PlaybackControls.tsx`](src/components/ui/PlaybackControls.tsx) | Prev / play-pause / Next controls (host only) |
+| [`src/components/ui/QueuePanel.tsx`](src/components/ui/QueuePanel.tsx) | Right "Up next" rail: header + add + list + footer |
+| [`src/components/ui/QueueRow.tsx`](src/components/ui/QueueRow.tsx) | Display-only queue row |
+| [`src/components/ui/Equalizer.tsx`](src/components/ui/Equalizer.tsx) | 3-bar animated equalizer |
+| [`src/components/ui/Toast.tsx`](src/components/ui/Toast.tsx) | Global pill toast + `toast()` helper |
+| [`src/components/ui/RoomCode.tsx`](src/components/ui/RoomCode.tsx) | **Legacy** — superseded by `RoomCodeChip` |
+| [`src/components/ui/ParticipantList.tsx`](src/components/ui/ParticipantList.tsx) | **Legacy** — superseded by `AvatarStack` on room pages |
 | [`src/components/ui/Button.tsx`](src/components/ui/Button.tsx) | Framer Motion button, `primary` / `secondary` variants |
 | [`src/components/ui/Input.tsx`](src/components/ui/Input.tsx) | Styled text input |
 | [`src/components/ui/Navbar.tsx`](src/components/ui/Navbar.tsx) | Centered "Amply" wordmark |

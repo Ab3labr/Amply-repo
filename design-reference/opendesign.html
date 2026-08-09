@@ -1,0 +1,1276 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>Amply — Now Playing</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,100..700&family=Inter:wght@400..700&display=swap" rel="stylesheet" />
+<style>
+  /* ============ Tokens — dark listening-room adaptation of modern-minimal ============ */
+  :root {
+    --bg: oklch(15% 0.008 60);
+    --bg-2: oklch(18% 0.010 60);
+    --surface: oklch(20% 0.010 60);
+    --surface-2: oklch(24% 0.012 60);
+    --fg: oklch(94% 0.012 75);
+    --muted: oklch(69% 0.015 60);
+    --border: oklch(94% 0.012 75 / 0.09);
+    --border-strong: oklch(94% 0.012 75 / 0.16);
+    --accent: oklch(72% 0.11 28);
+    --accent-hi: oklch(80% 0.09 30);
+    --accent-dim: oklch(72% 0.11 28 / 0.14);
+    --ok: oklch(72% 0.15 150);
+
+    --font-display: "Fraunces", Georgia, "Times New Roman", serif;
+    --font-body: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+
+    --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body { height: 100%; }
+
+  body {
+    background: var(--bg);
+    color: var(--fg);
+    font-family: var(--font-body);
+    font-size: 15px;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    overflow: hidden;
+  }
+
+  button { font: inherit; color: inherit; background: none; border: 0; cursor: pointer; }
+  button:focus-visible, input:focus-visible, [tabindex]:focus-visible {
+    outline: 2px solid var(--accent-hi);
+    outline-offset: 3px;
+    border-radius: 8px;
+  }
+  ::selection { background: var(--accent-dim); color: var(--fg); }
+
+  .app {
+    height: 100vh;
+    height: 100dvh;
+    display: flex;
+    flex-direction: column;
+    background:
+      radial-gradient(120% 90% at 50% -10%, oklch(22% 0.02 70 / 0.6), transparent 55%),
+      var(--bg);
+  }
+
+  /* ============ Top bar ============ */
+  .topbar {
+    height: 68px;
+    flex: none;
+    display: flex;
+    align-items: center;
+    gap: 22px;
+    padding: 0 26px;
+    border-bottom: 1px solid var(--border);
+    position: relative;
+    z-index: 20;
+  }
+
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-family: var(--font-body);
+    font-size: 25px;
+    letter-spacing: -0.01em;
+    color: var(--fg);
+  }
+  .brand-mark { width: 18px; height: 18px; }
+  .brand-mark circle { fill: none; stroke: var(--muted); stroke-width: 2.2; }
+  .brand-mark .label { fill: var(--muted); }
+
+  .room-chip {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 7px 10px 7px 16px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface);
+  }
+  .room-code {
+    font-family: var(--font-body);
+    font-size: 15px;
+    letter-spacing: 0.14em;
+    color: var(--fg);
+    font-variant-numeric: tabular-nums;
+  }
+  .icon-btn {
+    width: 34px;
+    height: 34px;
+    display: grid;
+    place-items: center;
+    border-radius: 50%;
+    color: var(--muted);
+    transition: color 0.18s var(--ease), background 0.18s var(--ease), transform 0.12s var(--ease);
+  }
+  .icon-btn:hover { color: var(--fg); background: var(--surface-2); }
+  .icon-btn:active { transform: translateY(1px); }
+  .icon-btn svg { display: block; }
+
+  .spacer { flex: 1; }
+
+  .people { display: flex; align-items: center; gap: 14px; }
+
+  .avatar-stack { display: flex; }
+  .avatar {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    background: var(--surface-2);
+    border: 2px solid var(--bg);
+    margin-left: -8px;
+    font-size: 12px;
+    font-weight: 550;
+    letter-spacing: 0.02em;
+    color: var(--fg);
+    position: relative;
+  }
+  .avatar:first-child { margin-left: 0; }
+  .avatar .ok-dot {
+    position: absolute;
+    right: -1px;
+    bottom: -1px;
+    width: 9px;
+    height: 9px;
+    border-radius: 50%;
+    background: var(--ok);
+    border: 2px solid var(--bg);
+  }
+  .people-count {
+    font-family: var(--font-body);
+    font-size: 12px;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+  }
+  .host-tag {
+    font-family: var(--font-body);
+    font-size: 10px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--muted);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 5px 9px;
+    margin-left: 2px;
+  }
+
+  /* ============ Stage layout ============ */
+  .stage {
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 384px;
+  }
+
+  .album-stage {
+    position: relative;
+    min-height: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 34px 40px 44px;
+  }
+
+  .stage-glow {
+    position: absolute;
+    left: 50%;
+    top: 46%;
+    width: 820px;
+    height: 820px;
+    transform: translate(-50%, -50%);
+    background: radial-gradient(circle, oklch(40% 0.05 70 / 0.14), transparent 62%);
+    border-radius: 50%;
+    pointer-events: none;
+  }
+
+  .bottom-glow {
+    position: absolute;
+    left: -12%;
+    right: -12%;
+    bottom: -16%;
+    height: 52%;
+    pointer-events: none;
+    filter: blur(70px);
+    opacity: 0.9;
+    background:
+      radial-gradient(42% 62% at 20% 92%, oklch(70% 0.11 28 / 0.22), transparent 70%),
+      radial-gradient(38% 58% at 58% 100%, oklch(55% 0.10 350 / 0.20), transparent 70%),
+      radial-gradient(40% 60% at 86% 84%, oklch(48% 0.09 20 / 0.18), transparent 70%);
+  }
+
+  /* ---- tilt scene: album card + vinyl ---- */
+  .tilt-scene {
+    position: relative;
+    width: min(44vh, 430px);
+    aspect-ratio: 1;
+    flex: none;
+    perspective: 1400px;
+    margin-bottom: 26px;
+  }
+
+  .vinyl {
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    background:
+      repeating-radial-gradient(circle at 50% 50%, rgba(255, 255, 255, 0.05) 0 1px, transparent 1px 9px),
+      radial-gradient(circle at 50% 50%, oklch(22% 0.008 60) 0 38%, oklch(12% 0.006 60) 70%, oklch(9% 0.005 60) 100%);
+    box-shadow:
+      inset 0 0 0 1px rgba(255, 255, 255, 0.05),
+      0 26px 60px -18px rgba(0, 0, 0, 0.7),
+      0 0 0 1px oklch(72% 0.11 28 / 0.3),
+      0 0 36px 5px oklch(72% 0.11 28 / 0.16);
+    will-change: transform;
+  }
+  .vinyl::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border-radius: 50%;
+    background:
+      radial-gradient(circle at 32% 26%, rgba(255, 255, 255, 0.07), transparent 34%),
+      conic-gradient(from 210deg, transparent 0deg, rgba(255, 255, 255, 0.025) 30deg, transparent 80deg);
+  }
+  .vinyl-label {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 17%;
+    aspect-ratio: 1;
+    transform: translate(-50%, -50%);
+    border-radius: 50%;
+    background: oklch(26% 0.02 70);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    display: grid;
+    place-items: center;
+  }
+  .vinyl-label::after {
+    content: "";
+    width: 12%;
+    aspect-ratio: 1;
+    border-radius: 50%;
+    background: oklch(9% 0.005 60);
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .vinyl { animation: spin 9s linear infinite; }
+  .app.paused .vinyl { animation-play-state: paused; }
+
+  .card-wrap {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    transform-style: preserve-3d;
+    will-change: transform;
+    transition: opacity 0.35s var(--ease);
+  }
+  .card-wrap.is-swapping { opacity: 0; }
+
+  .album-card {
+    position: relative;
+    width: 62%;
+    aspect-ratio: 1;
+    border-radius: 3px;
+    overflow: hidden;
+    box-shadow:
+      0 1px 0 rgba(255, 255, 255, 0.08) inset,
+      0 30px 50px -20px rgba(0, 0, 0, 0.75);
+    background: var(--surface-2);
+    transition: transform 0.4s var(--ease);
+    cursor: pointer;
+  }
+  .album-card:hover { transform: translateZ(14px); }
+
+  .art { position: absolute; inset: 0; transition: opacity 0.3s var(--ease); }
+  .art + .art { opacity: 0; }
+
+  .grain {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    opacity: 0.28;
+    mix-blend-mode: overlay;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch'/></filter><rect width='160' height='160' filter='url(/api/projects/74a5e864-0b5d-4fec-a24a-2fe0e5ddbbd6/raw/%23n?workspaceId=m1krlsxnef3eow6bchbjrmff&workspaceMemberId=sjz13h5m59w85op20yxy43gd)' opacity='0.5'/></svg>");
+  }
+
+  /* Cover art — original abstract compositions, cohesive warm-dark palette */
+  .art-a {
+    background:
+      radial-gradient(120% 120% at 18% 12%, oklch(62% 0.12 65 / 0.5), transparent 55%),
+      radial-gradient(90% 90% at 85% 85%, oklch(30% 0.05 40 / 0.9), transparent 60%),
+      linear-gradient(160deg, oklch(30% 0.045 55), oklch(17% 0.02 40));
+  }
+  .art-a::after {
+    content: "";
+    position: absolute;
+    left: 14%;
+    bottom: 12%;
+    width: 46%;
+    height: 9%;
+    border-radius: 999px;
+    background: oklch(84% 0.1 75 / 0.9);
+    transform: rotate(-14deg);
+    box-shadow: 0 0 0 8px oklch(84% 0.1 75 / 0.14);
+  }
+
+  .art-b {
+    background:
+      radial-gradient(120% 110% at 82% 14%, oklch(58% 0.1 160 / 0.35), transparent 55%),
+      linear-gradient(200deg, oklch(26% 0.03 160), oklch(16% 0.02 200));
+  }
+  .art-b::before {
+    content: "";
+    position: absolute;
+    right: -16%;
+    top: -12%;
+    width: 78%;
+    aspect-ratio: 1;
+    border-radius: 50%;
+    border: 1px solid oklch(80% 0.08 160 / 0.5);
+    box-shadow: 0 0 0 18px oklch(80% 0.08 160 / 0.06);
+  }
+
+  .art-c {
+    background:
+      radial-gradient(100% 120% at 30% 80%, oklch(58% 0.1 25 / 0.4), transparent 58%),
+      linear-gradient(130deg, oklch(30% 0.045 20), oklch(18% 0.02 10));
+  }
+  .art-c::before {
+    content: "";
+    position: absolute;
+    left: 22%;
+    top: 18%;
+    width: 34%;
+    aspect-ratio: 1;
+    border-radius: 50%;
+    background: linear-gradient(150deg, oklch(72% 0.1 30), oklch(44% 0.09 20));
+  }
+  .album-card .art-c {
+    background-image: url("/api/projects/74a5e864-0b5d-4fec-a24a-2fe0e5ddbbd6/raw/mauve-sunset.jpg?workspaceId=m1krlsxnef3eow6bchbjrmff&workspaceMemberId=sjz13h5m59w85op20yxy43gd");
+    background-size: cover;
+    background-position: center;
+  }
+  .album-card .art-c::before { display: none; }
+
+  .art-d {
+    background:
+      radial-gradient(130% 100% at 20% 10%, oklch(56% 0.09 255 / 0.3), transparent 55%),
+      linear-gradient(180deg, oklch(27% 0.03 250), oklch(16% 0.02 250));
+  }
+  .art-d::after {
+    content: "";
+    position: absolute;
+    left: 8%;
+    right: 8%;
+    top: 50%;
+    height: 2px;
+    background: oklch(82% 0.07 250 / 0.7);
+    box-shadow: 0 18px 0 oklch(82% 0.07 250 / 0.35), 0 38px 0 oklch(82% 0.07 250 / 0.14);
+  }
+
+  .art-e {
+    background:
+      radial-gradient(100% 100% at 78% 78%, oklch(64% 0.11 85 / 0.5), transparent 55%),
+      linear-gradient(120deg, oklch(34% 0.06 70), oklch(19% 0.03 55));
+  }
+  .art-e::before {
+    content: "";
+    position: absolute;
+    left: 12%;
+    top: 12%;
+    width: 56%;
+    height: 56%;
+    border-radius: 50%;
+    background: radial-gradient(circle at 40% 35%, oklch(86% 0.09 85 / 0.9), oklch(52% 0.11 75) 70%);
+  }
+
+  .art-f {
+    background:
+      radial-gradient(120% 120% at 85% 20%, oklch(60% 0.1 200 / 0.35), transparent 55%),
+      linear-gradient(140deg, oklch(27% 0.025 210), oklch(16% 0.02 210));
+  }
+  .art-f::after {
+    content: "";
+    position: absolute;
+    inset: 14%;
+    border-radius: 50%;
+    border: 1px dashed oklch(82% 0.08 200 / 0.55);
+  }
+  .art-f::before {
+    content: "";
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 22%;
+    aspect-ratio: 1;
+    transform: translate(-50%, -50%);
+    border-radius: 50%;
+    background: oklch(84% 0.08 200 / 0.9);
+  }
+
+  .art-add {
+    background:
+      radial-gradient(120% 120% at 30% 20%, oklch(60% 0.12 75 / 0.22), transparent 60%),
+      linear-gradient(140deg, oklch(28% 0.012 60), oklch(18% 0.012 60));
+  }
+  .art-add::after {
+    content: "+";
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-items: center;
+    font-family: var(--font-body);
+    font-size: 26px;
+    color: var(--muted);
+  }
+
+  /* ---- track meta ---- */
+  .track-meta {
+    text-align: center;
+    flex: none;
+    max-width: 560px;
+  }
+  .eyebrow {
+    font-family: var(--font-body);
+    font-size: 11px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 9px;
+  }
+  .eyebrow::before, .eyebrow::after {
+    content: "";
+    width: 26px;
+    height: 1px;
+    background: var(--border-strong);
+  }
+  .track-title {
+    font-family: var(--font-display);
+    font-size: clamp(30px, 4vw, 52px);
+    line-height: 1.04;
+    letter-spacing: -0.015em;
+    font-weight: 400;
+    color: var(--fg);
+    margin-bottom: 10px;
+  }
+  .track-sub {
+    font-size: 15px;
+    color: var(--muted);
+    letter-spacing: 0.01em;
+  }
+  .track-sub .dot { color: var(--border-strong); margin: 0 8px; }
+
+  /* ---- progress + controls ---- */
+  .progress-zone {
+    width: min(520px, 86%);
+    flex: none;
+    margin-top: 26px;
+  }
+  .progress {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-bottom: 18px;
+  }
+  .time {
+    font-family: var(--font-body);
+    font-size: 12px;
+    letter-spacing: 0.04em;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+    min-width: 42px;
+  }
+  .time:last-child { text-align: right; }
+  .bar {
+    flex: 1;
+    height: 4px;
+    border-radius: 999px;
+    background: oklch(94% 0.012 75 / 0.1);
+    position: relative;
+    cursor: pointer;
+  }
+  .bar::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    height: 32px;
+    border-radius: 999px;
+  }
+  .bar .fill {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    border-radius: 999px;
+    background: var(--accent);
+    width: 0%;
+    transition: height 0.16s var(--ease);
+  }
+  .bar .knob {
+    position: absolute;
+    top: 50%;
+    width: 14px;
+    height: 14px;
+    border-radius: 50%;
+    background: var(--accent-hi);
+    transform: translate(-50%, -50%);
+    box-shadow: 0 0 0 4px oklch(94% 0.012 75 / 0.06);
+    opacity: 0;
+    transition: opacity 0.18s var(--ease);
+    pointer-events: none;
+  }
+  .bar:hover .knob, .bar.scrubbing .knob { opacity: 1; }
+  .bar:hover .fill, .bar.scrubbing .fill { height: 6px; }
+
+  .controls {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 14px;
+    flex: none;
+  }
+  .ctl-btn {
+    width: 46px;
+    height: 46px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    color: var(--fg);
+    background: transparent;
+    border: 1px solid var(--border);
+    transition: background 0.18s var(--ease), border-color 0.18s var(--ease), transform 0.12s var(--ease);
+  }
+  .ctl-btn:hover { background: var(--surface-2); border-color: var(--border-strong); }
+  .ctl-btn:active { transform: translateY(1px) scale(0.97); }
+  .play-btn {
+    width: 72px;
+    height: 72px;
+    border-radius: 50%;
+    display: grid;
+    place-items: center;
+    background: var(--accent);
+    color: oklch(14% 0.02 50);
+    box-shadow: 0 14px 30px -12px oklch(72% 0.11 28 / 0.45);
+    transition: background 0.2s var(--ease), transform 0.12s var(--ease), box-shadow 0.2s var(--ease);
+  }
+  .play-btn:hover {
+    background: var(--accent-hi);
+    box-shadow: 0 16px 34px -12px oklch(80% 0.09 30 / 0.5);
+  }
+  .play-btn:active { transform: translateY(1px) scale(0.97); }
+  .play-btn svg { transition: transform 0.2s var(--ease); }
+
+  .kbd-hint {
+    font-family: var(--font-body);
+    font-size: 11px;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+    margin-top: 22px;
+    opacity: 0.7;
+    flex: none;
+  }
+  .kbd-hint kbd {
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 1px 6px;
+    margin: 0 2px;
+    font-family: var(--font-body);
+  }
+
+  /* ============ Queue rail ============ */
+  .queue-panel {
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    border-left: 1px solid var(--border);
+    background: oklch(14% 0.008 60 / 0.5);
+  }
+  .qp-head {
+    flex: none;
+    padding: 20px 22px 18px;
+    border-bottom: 1px solid var(--border);
+  }
+  .qp-title-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-bottom: 14px;
+  }
+  .qp-title {
+    font-family: var(--font-body);
+    font-size: 11px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .qp-count {
+    font-family: var(--font-body);
+    font-size: 12px;
+    letter-spacing: 0.06em;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
+  .add-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .add-input {
+    flex: 1;
+    min-width: 0;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 11px 14px;
+    font: inherit;
+    font-size: 14px;
+    color: var(--fg);
+    transition: border-color 0.18s var(--ease), background 0.18s var(--ease);
+  }
+  .add-input::placeholder { color: var(--muted); }
+  .add-input:hover { border-color: var(--border-strong); }
+  .add-input:focus { outline: none; border-color: var(--accent); background: var(--surface-2); }
+  .add-btn {
+    width: 44px;
+    height: 44px;
+    flex: none;
+    border-radius: 12px;
+    display: grid;
+    place-items: center;
+    background: transparent;
+    color: var(--fg);
+    border: 1px solid var(--border);
+    transition: border-color 0.18s var(--ease), background 0.18s var(--ease), transform 0.12s var(--ease);
+  }
+  .add-btn:hover { background: var(--surface-2); border-color: var(--border-strong); }
+  .add-btn:active { transform: translateY(1px) scale(0.97); }
+  .add-btn[disabled] { background: transparent; color: var(--muted); cursor: default; border-color: var(--border); opacity: 0.55; }
+
+  .qp-list {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border-strong) transparent;
+  }
+  .qp-list::-webkit-scrollbar { width: 8px; }
+  .qp-list::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 999px; }
+  .qp-list::-webkit-scrollbar-track { background: transparent; }
+
+  .qp-row {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    padding: 13px 22px;
+    border-bottom: 1px solid var(--border);
+    cursor: pointer;
+    transition: background 0.16s var(--ease);
+    position: relative;
+  }
+  .qp-row:hover { background: var(--surface); }
+  .qp-row.is-current { background: oklch(20% 0.02 70 / 0.65); }
+
+  .qp-thumb {
+    width: 46px;
+    height: 46px;
+    flex: none;
+    border-radius: 4px;
+    overflow: hidden;
+    position: relative;
+    background: var(--surface-2);
+  }
+  .qp-thumb .art { border-radius: 4px; }
+
+  .qp-index {
+    font-family: var(--font-body);
+    font-size: 12px;
+    letter-spacing: 0.05em;
+    color: var(--muted);
+    width: 22px;
+    flex: none;
+    font-variant-numeric: tabular-nums;
+  }
+  .qp-current-ind {
+    width: 22px;
+    flex: none;
+    display: grid;
+    place-items: center;
+  }
+
+  .qp-meta {
+    flex: 1;
+    min-width: 0;
+  }
+  .qp-title-line {
+    font-size: 14px;
+    font-weight: 550;
+    color: var(--fg);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    letter-spacing: 0.005em;
+  }
+  .qp-artist {
+    font-size: 13px;
+    color: var(--muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-top: 1px;
+  }
+  .qp-dur {
+    font-family: var(--font-body);
+    font-size: 12px;
+    letter-spacing: 0.04em;
+    color: var(--muted);
+    flex: none;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .qp-foot {
+    flex: none;
+    padding: 13px 22px 16px;
+    border-top: 1px solid var(--border);
+    font-size: 12px;
+    color: var(--muted);
+    letter-spacing: 0.01em;
+    line-height: 1.5;
+  }
+  .qp-foot b { color: var(--fg); font-weight: 550; }
+
+  /* equalizer bars */
+  .eq { display: flex; align-items: flex-end; gap: 2.5px; height: 15px; }
+  .eq i {
+    width: 3px;
+    border-radius: 2px;
+    background: var(--accent);
+    height: 30%;
+    animation: eq 1.1s ease-in-out infinite;
+  }
+  .eq i:nth-child(2) { animation-delay: 0.2s; }
+  .eq i:nth-child(3) { animation-delay: 0.45s; }
+  @keyframes eq { 0%, 100% { height: 25%; } 50% { height: 100%; } }
+  .app.paused .eq i { animation-play-state: paused; height: 30%; }
+
+  .toast {
+    position: fixed;
+    left: 50%;
+    bottom: 26px;
+    transform: translate(-50%, 16px);
+    background: var(--surface-2);
+    border: 1px solid var(--border-strong);
+    border-radius: 999px;
+    padding: 9px 16px;
+    font-family: var(--font-body);
+    font-size: 12px;
+    letter-spacing: 0.06em;
+    color: var(--fg);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.25s var(--ease), transform 0.25s var(--ease);
+    z-index: 50;
+  }
+  .toast.show { opacity: 1; transform: translate(-50%, 0); }
+
+  /* ============ Responsive ============ */
+  @media (max-height: 780px) {
+    .tilt-scene { width: min(38vh, 430px); margin-bottom: 18px; }
+    .album-stage { padding-top: 18px; padding-bottom: 22px; }
+    .progress-zone { margin-top: 18px; }
+    .kbd-hint { margin-top: 14px; }
+    .track-title { font-size: clamp(28px, 3.6vw, 44px); }
+  }
+
+  /* Tablet + narrow desktop: stack columns, let page scroll vertically */
+  @media (max-width: 1080px) {
+    body { overflow-x: hidden; overflow-y: auto; }
+    .app { height: auto; min-height: 100vh; min-height: 100dvh; }
+    .stage { grid-template-columns: 1fr; }
+    .album-stage { padding: 26px 20px 34px; }
+    .queue-panel { border-left: 0; border-top: 1px solid var(--border); max-height: 52vh; }
+    .qp-list { min-height: 240px; }
+  }
+
+  /* Small tablets / large phones: compress top bar */
+  @media (max-width: 900px) {
+    .topbar { gap: 16px; }
+    .brand { font-size: 23px; }
+    .people { gap: 10px; }
+    .avatar { width: 28px; height: 28px; margin-left: -6px; font-size: 11px; }
+    .avatar .ok-dot { width: 8px; height: 8px; }
+  }
+
+  /* Phones */
+  @media (max-width: 640px) {
+    .topbar {
+      height: 60px;
+      gap: 12px;
+      padding: 0 14px;
+    }
+    .brand { font-size: 21px; gap: 8px; }
+    .brand-mark { width: 16px; height: 16px; }
+    .room-chip { gap: 8px; padding: 6px 8px 6px 13px; }
+    .room-code { font-size: 14px; letter-spacing: 0.12em; }
+    .icon-btn { width: 40px; height: 40px; }
+    .people { gap: 8px; }
+    .host-tag { display: none; }
+    .people-count { font-size: 11px; }
+    .album-stage {
+      padding: 22px 16px calc(30px + env(safe-area-inset-bottom));
+    }
+    .track-title { font-size: clamp(26px, 8vw, 30px); }
+    .tilt-scene { width: min(72vw, 320px); margin-bottom: 18px; }
+    .bottom-glow { filter: blur(48px); }
+    .progress-zone { width: min(520px, 92%); }
+    .progress { gap: 10px; }
+    .kbd-hint { font-size: 10px; letter-spacing: 0.05em; margin-top: 16px; }
+    .controls { gap: 12px; }
+    .play-btn { width: 64px; height: 64px; }
+    .ctl-btn { width: 44px; height: 44px; }
+    .toast { bottom: calc(22px + env(safe-area-inset-bottom)); }
+  }
+
+  /* Compact phones: drop avatar stack + member count */
+  @media (max-width: 420px) {
+    .topbar { padding: 0 10px; gap: 10px; }
+    .people { display: none; }
+    .icon-btn { width: 36px; height: 36px; }
+    .brand { font-size: 19px; }
+    .track-sub { font-size: 14px; }
+  }
+</style>
+</head>
+<body>
+<div class="app" id="app">
+
+  <header class="topbar" data-od-id="topbar">
+    <div class="brand" data-od-id="brand">
+      <svg class="brand-mark" viewBox="0 0 20 20" aria-hidden="true">
+        <circle cx="10" cy="10" r="7.2"></circle>
+        <circle class="label" cx="10" cy="10" r="2.1"></circle>
+      </svg>
+      Amply
+    </div>
+
+    <div class="room-chip" data-od-id="room-chip">
+      <span class="room-code" id="roomCode">7K4M2Q</span>
+      <button class="icon-btn" id="copyBtn" aria-label="Copy room code" data-od-id="copy-button">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <rect x="9" y="9" width="12" height="12" rx="2.5"></rect>
+          <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+        </svg>
+      </button>
+    </div>
+
+    <div class="spacer"></div>
+
+    <div class="people" data-od-id="people">
+      <span class="host-tag">Host</span>
+      <div class="avatar-stack" aria-label="4 people in the room">
+        <div class="avatar" title="Maya (host)">MA</div>
+        <div class="avatar" title="Jonas">JO<span class="ok-dot"></span></div>
+        <div class="avatar" title="Priya">PR<span class="ok-dot"></span></div>
+        <div class="avatar" title="+1 more">+1</div>
+      </div>
+      <span class="people-count">4 in the room</span>
+    </div>
+  </header>
+
+  <main class="stage">
+
+    <section class="album-stage" id="albumStage" data-od-id="now-playing-stage">
+      <div class="stage-glow"></div>
+      <div class="bottom-glow" aria-hidden="true"></div>
+
+      <div class="tilt-scene" id="tiltScene">
+        <div class="vinyl" aria-hidden="true"><span class="vinyl-label"></span></div>
+        <div class="card-wrap" id="cardWrap" data-od-id="album-card">
+          <div class="album-card" id="albumCard">
+            <div class="art art-a"></div>
+            <div class="art art-b"></div>
+            <div class="art art-c"></div>
+            <div class="art art-d"></div>
+            <div class="art art-e"></div>
+            <div class="art art-f"></div>
+            <div class="grain"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="track-meta">
+        <div class="eyebrow" id="statusLabel">Now playing</div>
+        <h1 class="track-title" id="trackTitle">Vinyl Hearts</h1>
+        <p class="track-sub">
+          <span id="trackArtist">The Low Notes</span>
+          <span class="dot">·</span>
+          <span id="trackAlbum">Analog Dreams</span>
+        </p>
+      </div>
+
+      <div class="progress-zone">
+        <div class="progress">
+          <span class="time" id="timeNow">0:00</span>
+          <div class="bar" id="seekBar" role="slider" tabindex="0" aria-label="Seek" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" data-od-id="progress-bar">
+            <div class="fill" id="seekFill"></div>
+            <div class="knob" id="seekKnob"></div>
+          </div>
+          <span class="time" id="timeTotal">5:03</span>
+        </div>
+
+        <div class="controls" data-od-id="playback-controls">
+          <button class="ctl-btn" id="prevBtn" aria-label="Previous track" data-od-id="prev-button">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M5 5v14"></path>
+              <path d="M19 6v12l-10-6z" fill="currentColor" stroke="none"></path>
+            </svg>
+          </button>
+          <button class="play-btn" id="playBtn" aria-label="Play or pause" data-od-id="play-button">
+            <svg id="playIcon" width="26" height="26" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <path d="M7 4.5v15l13-7.5z"></path>
+            </svg>
+          </button>
+          <button class="ctl-btn" id="nextBtn" aria-label="Next track" data-od-id="next-button">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M19 5v14"></path>
+              <path d="M5 6v12l10-6z" fill="currentColor" stroke="none"></path>
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <div class="kbd-hint"><kbd>Space</kbd> play/pause · <kbd>←</kbd><kbd>→</kbd> seek</div>
+    </section>
+
+    <aside class="queue-panel" data-od-id="queue-panel">
+      <div class="qp-head">
+        <div class="qp-title-row">
+          <span class="qp-title">Up next</span>
+          <span class="qp-count" id="queueCount">5 tracks</span>
+        </div>
+        <div class="add-row">
+          <input class="add-input" id="addInput" type="text" placeholder="Paste a YouTube link to add" aria-label="Add song to queue" data-od-id="queue-input" />
+          <button class="add-btn" id="addBtn" aria-label="Add to queue" disabled data-od-id="add-to-queue">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+              <path d="M12 5v14M5 12h14"></path>
+            </svg>
+          </button>
+        </div>
+      </div>
+
+      <div class="qp-list" id="qpList" data-od-id="queue-list"><!-- rows injected --></div>
+
+      <div class="qp-foot" data-od-id="queue-foot">
+        Anyone in the room can add. New links resolve to track titles on the server.
+      </div>
+    </aside>
+
+  </main>
+
+  <div class="toast" id="toast" role="status"></div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  var TRACKS = [
+    { title: "Soft Static", artist: "Monokrome", album: "Halogen", dur: 252, art: "art-a" },
+    { title: "Night Signal", artist: "Aura Fields", album: "Parallel Lines", dur: 228, art: "art-b" },
+    { title: "Vinyl Hearts", artist: "The Low Notes", album: "Analog Dreams", dur: 303, art: "art-c" },
+    { title: "Chrome Dune", artist: "Cassia", album: "Inertia", dur: 209, art: "art-d" },
+    { title: "Slow Motion Gold", artist: "Velvet Arc", album: "Afterglow", dur: 285, art: "art-e" },
+    { title: "Tide Lines", artist: "Yuma", album: "Midnight Tide", dur: 237, art: "art-f" }
+  ];
+
+  var STORE_KEY = "amply:nowplaying";
+  var app = document.getElementById("app");
+  var albumStage = document.getElementById("albumStage");
+  var cardWrap = document.getElementById("cardWrap");
+  var albumCard = document.getElementById("albumCard");
+  var trackTitle = document.getElementById("trackTitle");
+  var trackArtist = document.getElementById("trackArtist");
+  var trackAlbum = document.getElementById("trackAlbum");
+  var statusLabel = document.getElementById("statusLabel");
+  var timeNow = document.getElementById("timeNow");
+  var timeTotal = document.getElementById("timeTotal");
+  var seekBar = document.getElementById("seekBar");
+  var seekFill = document.getElementById("seekFill");
+  var seekKnob = document.getElementById("seekKnob");
+  var playBtn = document.getElementById("playBtn");
+  var playIcon = document.getElementById("playIcon");
+  var qpList = document.getElementById("qpList");
+  var queueCount = document.getElementById("queueCount");
+  var addInput = document.getElementById("addInput");
+  var addBtn = document.getElementById("addBtn");
+  var copyBtn = document.getElementById("copyBtn");
+  var toast = document.getElementById("toast");
+
+  var arts = Array.prototype.slice.call(albumCard.querySelectorAll(".art"));
+  var state = { idx: 2, t: 0, playing: true };
+  var swapping = false;
+
+  // ---- persistence ----
+  try {
+    var saved = JSON.parse(localStorage.getItem(STORE_KEY) || "null");
+    if (saved && saved.idx != null && saved.idx >= 0 && saved.idx < TRACKS.length) {
+      state.idx = saved.idx;
+      state.t = Math.min(saved.t || 0, TRACKS[saved.idx].dur - 1);
+      state.playing = saved.playing !== false;
+    }
+  } catch (e) {}
+
+  function save() {
+    try { localStorage.setItem(STORE_KEY, JSON.stringify({ idx: state.idx, t: state.t, playing: state.playing })); } catch (e) {}
+  }
+
+  function fmt(s) {
+    s = Math.max(0, Math.floor(s));
+    var m = Math.floor(s / 60), r = s % 60;
+    return m + ":" + (r < 10 ? "0" : "") + r;
+  }
+
+  function showArt(cls) {
+    arts.forEach(function (el, i) {
+      var isTarget = el.className.indexOf(cls) !== -1;
+      el.style.opacity = isTarget ? "1" : "0";
+    });
+  }
+
+  // Cheap per-frame update — never touches the queue DOM.
+  function paintNow() {
+    var tr = TRACKS[state.idx];
+    var pct = state.t / tr.dur * 100;
+    timeNow.textContent = fmt(state.t);
+    seekFill.style.width = pct + "%";
+    seekKnob.style.left = pct + "%";
+    seekBar.setAttribute("aria-valuenow", Math.round(pct));
+    statusLabel.textContent = state.playing ? "Now playing" : "Paused";
+    app.classList.toggle("paused", !state.playing);
+    playIcon.innerHTML = state.playing
+      ? '<path d="M7.5 5.5h2.8v13H7.5zM13.7 5.5h2.8v13h-2.8z"></path>'
+      : '<path d="M7 4.5v15l13-7.5z"></path>';
+  }
+
+  // Full repaint — only on track/queue change.
+  function paint() {
+    var tr = TRACKS[state.idx];
+    trackTitle.textContent = tr.title;
+    trackArtist.textContent = tr.artist;
+    trackAlbum.textContent = tr.album;
+    timeTotal.textContent = fmt(tr.dur);
+    paintNow();
+    renderQueue();
+  }
+
+  function renderQueue() {
+    var html = "";
+    TRACKS.forEach(function (tr, i) {
+      var cur = i === state.idx;
+      html += '<div class="qp-row' + (cur ? " is-current" : "") + '" data-i="' + i + '" tabindex="0" role="button" aria-label="Play ' + tr.title + '">';
+      html += '<div class="qp-thumb"><div class="art ' + tr.art + '"></div><div class="grain"></div></div>';
+      if (cur) {
+        html += '<div class="qp-current-ind" aria-hidden="true"><div class="eq"><i></i><i></i><i></i></div></div>';
+      } else {
+        html += '<span class="qp-index">' + String(i + 1).padStart(2, "0") + "</span>";
+      }
+      html += '<div class="qp-meta"><div class="qp-title-line">' + tr.title + '</div><div class="qp-artist">' + tr.artist + " · " + tr.album + "</div></div>";
+      html += '<span class="qp-dur">' + fmt(tr.dur) + "</span>";
+      html += "</div>";
+    });
+    qpList.innerHTML = html;
+    queueCount.textContent = TRACKS.length + (TRACKS.length === 1 ? " track" : " tracks");
+  }
+
+  function swapTrack(nextIdx, restart) {
+    if (swapping) return;
+    swapping = true;
+    if (nextIdx < 0) nextIdx = TRACKS.length - 1;
+    if (nextIdx >= TRACKS.length) nextIdx = 0;
+    cardWrap.classList.add("is-swapping");
+    setTimeout(function () {
+      state.idx = nextIdx;
+      state.t = restart ? 0 : state.t;
+      showArt(TRACKS[nextIdx].art);
+      paint();
+      cardWrap.classList.remove("is-swapping");
+      swapping = false;
+    }, 300);
+  }
+
+  // ---- playback clock ----
+  var last = performance.now();
+  function frame(now) {
+    var dt = Math.min((now - last) / 1000, 0.2);
+    last = now;
+    if (state.playing) {
+      state.t += dt;
+      var d = TRACKS[state.idx].dur;
+      if (state.t >= d) {
+        swapTrack(state.idx + 1, true);
+      } else {
+        paintNow();
+      }
+    }
+    requestAnimationFrame(frame);
+  }
+
+  // ---- 3D tilt on cursor ----
+  var targetRX = 6, targetRY = -14, curRX = 6, curRY = -14;
+  albumStage.addEventListener("pointermove", function (e) {
+    var r = albumStage.getBoundingClientRect();
+    var nx = (e.clientX - r.left) / r.width * 2 - 1;
+    var ny = (e.clientY - r.top) / r.height * 2 - 1;
+    targetRY = -14 + nx * 9;
+    targetRX = 6 - ny * 7;
+  });
+  albumStage.addEventListener("pointerleave", function () {
+    targetRX = 6; targetRY = -14;
+  });
+
+  var lastTilt = performance.now();
+  function tilt() {
+    var now = performance.now();
+    var k = 1 - Math.pow(0.001, (now - lastTilt) / 1000);
+    lastTilt = now;
+    curRX += (targetRX - curRX) * k;
+    curRY += (targetRY - curRY) * k;
+    cardWrap.style.transform = "rotateX(" + curRX.toFixed(3) + "deg) rotateY(" + curRY.toFixed(3) + "deg)";
+    requestAnimationFrame(tilt);
+  }
+
+  // ---- play / pause ----
+  function togglePlay() {
+    state.playing = !state.playing;
+    if (state.playing) { last = performance.now(); }
+    paintNow();
+    save();
+  }
+  playBtn.addEventListener("click", togglePlay);
+  albumCard.addEventListener("click", togglePlay);
+
+  // ---- seek ----
+  function seekTo(frac) {
+    frac = Math.max(0, Math.min(1, frac));
+    state.t = frac * TRACKS[state.idx].dur;
+    paintNow();
+    save();
+  }
+  seekBar.addEventListener("pointerdown", function (e) {
+    seekBar.classList.add("scrubbing");
+    seekBar.setPointerCapture(e.pointerId);
+    var r = seekBar.getBoundingClientRect();
+    seekTo((e.clientX - r.left) / r.width);
+  });
+  seekBar.addEventListener("pointermove", function (e) {
+    if (seekBar.classList.contains("scrubbing")) {
+      var r = seekBar.getBoundingClientRect();
+      seekTo((e.clientX - r.left) / r.width);
+    }
+  });
+  ["pointerup", "pointercancel"].forEach(function (ev) {
+    seekBar.addEventListener(ev, function () {
+      seekBar.classList.remove("scrubbing");
+      save();
+    });
+  });
+  seekBar.addEventListener("keydown", function (e) {
+    if (e.key === "ArrowRight") { e.preventDefault(); seekTo(state.t / TRACKS[state.idx].dur + 5 / TRACKS[state.idx].dur); }
+    if (e.key === "ArrowLeft") { e.preventDefault(); seekTo(state.t / TRACKS[state.idx].dur - 5 / TRACKS[state.idx].dur); }
+  });
+
+  // ---- prev / next ----
+  document.getElementById("prevBtn").addEventListener("click", function () { swapTrack(state.idx - 1, true); save(); });
+  document.getElementById("nextBtn").addEventListener("click", function () { swapTrack(state.idx + 1, true); save(); });
+
+  // ---- queue clicks ----
+  qpList.addEventListener("click", function (e) {
+    var row = e.target.closest(".qp-row");
+    if (row) { swapTrack(Number(row.getAttribute("data-i")), true); save(); }
+  });
+  qpList.addEventListener("keydown", function (e) {
+    if (e.key === "Enter" || e.key === " ") {
+      var row = e.target.closest(".qp-row");
+      if (row) { e.preventDefault(); swapTrack(Number(row.getAttribute("data-i")), true); save(); }
+    }
+  });
+
+  // ---- add to queue ----
+  addInput.addEventListener("input", function () {
+    addBtn.disabled = !addInput.value.trim();
+  });
+  function addTrack() {
+    var v = addInput.value.trim();
+    if (!v) return;
+    TRACKS.push({ title: v.length > 56 ? v.slice(0, 53) + "…" : v, artist: "Added to room", album: "Pending", dur: 3 * 60 + 20, art: "art-add" });
+    addInput.value = "";
+    addBtn.disabled = true;
+    renderQueue();
+    toastMsg("Added to queue");
+  }
+  addBtn.addEventListener("click", addTrack);
+  addInput.addEventListener("keydown", function (e) {
+    if (e.key === "Enter") { e.preventDefault(); addTrack(); }
+  });
+
+  // ---- copy room code ----
+  copyBtn.addEventListener("click", function () {
+    var code = document.getElementById("roomCode").textContent;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(code).catch(function () {});
+    }
+    toastMsg("Room code copied");
+  });
+
+  // ---- keyboard (global) ----
+  document.addEventListener("keydown", function (e) {
+    var t = e.target;
+    if (t === addInput || t === seekBar) return;
+    if (t.closest && t.closest(".qp-row, .add-row")) return;
+    if (t.tagName === "BUTTON") return;
+    if (e.code === "Space") { e.preventDefault(); togglePlay(); }
+    if (e.key === "ArrowRight" && !e.metaKey && !e.ctrlKey) { e.preventDefault(); seekTo(state.t / TRACKS[state.idx].dur + 5 / TRACKS[state.idx].dur); }
+    if (e.key === "ArrowLeft" && !e.metaKey && !e.ctrlKey) { e.preventDefault(); seekTo(state.t / TRACKS[state.idx].dur - 5 / TRACKS[state.idx].dur); }
+  });
+
+  // ---- toast ----
+  var toastTimer = null;
+  function toastMsg(msg) {
+    toast.textContent = msg;
+    toast.classList.add("show");
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(function () { toast.classList.remove("show"); }, 1800);
+  }
+
+  // ---- init ----
+  var firstArt = TRACKS[state.idx].art;
+  arts.forEach(function (el) { el.style.opacity = el.className.indexOf(firstArt) !== -1 ? "1" : "0"; });
+  paint();
+  requestAnimationFrame(frame);
+  requestAnimationFrame(tilt);
+  save();
+})();
+</script>
+</body>
+</html>

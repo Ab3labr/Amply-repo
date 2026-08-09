@@ -1,19 +1,13 @@
 "use client";
 
-import { Button } from "@/components/ui/Button";
-import { Divider } from "@/components/ui/Divider";
-import { Navbar } from "@/components/ui/Navbar";
-import { PageContainer } from "@/components/ui/PageContainer";
-import { ParticipantList } from "@/components/ui/ParticipantList";
-import { RoomCode } from "@/components/ui/RoomCode";
+import { Topbar } from "@/components/ui/Topbar";
+import { QueuePanel } from "@/components/ui/QueuePanel";
+import { Toast } from "@/components/ui/Toast";
 import { HostPlayer } from "@/components/ui/HostPlayer";
 import { HostPlayerErrorBoundary } from "@/components/ui/HostPlayerErrorBoundary";
-import { QueueInput } from "@/components/ui/QueueInput";
 import { RoomData } from "@/lib/store";
-import { motion } from "framer-motion";
 import { useState, useEffect, useRef, use } from "react";
 import { useRouter } from "next/navigation";
-import { LogOut } from "lucide-react";
 import { io, type Socket } from "socket.io-client";
 
 export default function HostRoomPage({ params }: { params: Promise<{ code: string }> }) {
@@ -165,52 +159,32 @@ export default function HostRoomPage({ params }: { params: Promise<{ code: strin
   }, [code, router]);
 
   return (
-    <PageContainer>
-      <div className="absolute top-6 left-6 z-20">
-        <button onClick={() => router.push("/")} className="text-secondary hover:text-primary flex items-center gap-2 transition-colors">
-          <LogOut size={20} />
-          <span>Leave</span>
-        </button>
-      </div>
+    <div className="app-shell flex min-h-dvh flex-col bg-background lg:h-dvh lg:overflow-hidden">
+      <Toast />
+      <Topbar code={code} members={roomState?.members || []} onLeave={() => router.push("/")} />
 
-      <Navbar />
+      <main className="grid w-full min-h-0 flex-1 grid-cols-1 lg:grid-cols-[minmax(0,1fr)_384px]">
+        <div className="relative flex min-h-0 flex-col overflow-hidden">
+          <HostPlayerErrorBoundary>
+            <HostPlayer
+              code={code}
+              queue={roomState?.queue || []}
+              currentSongIndex={roomState?.currentSongIndex || 0}
+              isPlaying={roomState?.isPlaying || false}
+              onPlay={emitPlay}
+              onPause={emitPause}
+              onSeek={emitSeek}
+            />
+          </HostPlayerErrorBoundary>
+        </div>
 
-      <main className="flex-1 w-full max-w-[500px] flex flex-col items-center justify-start mt-8 mb-20 z-10 mx-auto">
-        <motion.div
-          initial={{ opacity: 0, scale: 0.98, y: 10 }}
-          animate={{ opacity: 1, scale: 1, y: 0 }}
-          transition={{ duration: 0.6, ease: [0.16, 1, 0.3, 1] }}
-          className="w-full flex flex-col items-center"
-        >
-          <div className="mb-10 w-full">
-            <RoomCode code={code} />
-          </div>
-
-          <div className="w-full mb-6">
-            <ParticipantList participants={roomState?.members || []} />
-          </div>
-
-          <Divider />
-
-          {/* Queue & Player */}
-          <div className="w-full flex flex-col items-center mt-2">
-            <h2 className="text-[22px] font-semibold text-primary w-full text-center">Party Queue</h2>
-            <QueueInput code={code} />
-
-            <HostPlayerErrorBoundary>
-              <HostPlayer
-                code={code}
-                queue={roomState?.queue || []}
-                currentSongIndex={roomState?.currentSongIndex || 0}
-                isPlaying={roomState?.isPlaying || false}
-                onPlay={emitPlay}
-                onPause={emitPause}
-                onSeek={emitSeek}
-              />
-            </HostPlayerErrorBoundary>
-          </div>
-        </motion.div>
+        <QueuePanel
+          code={code}
+          queue={roomState?.queue || []}
+          currentSongIndex={roomState?.currentSongIndex || 0}
+          isPlaying={roomState?.isPlaying || false}
+        />
       </main>
-    </PageContainer>
+    </div>
   );
 }

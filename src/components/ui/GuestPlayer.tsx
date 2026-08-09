@@ -2,6 +2,8 @@
 
 import { useState, useRef, useEffect } from "react";
 import { QueueItem } from "@/lib/store";
+import { getYouTubeVideoId } from "@/lib/youtube";
+import { NowPlayingStage } from "@/components/ui/NowPlayingStage";
 
 declare global {
   interface Window {
@@ -21,10 +23,12 @@ interface GuestPlayerProps {
   isPlaying: boolean;
   serverProgress: number;
   socketCommand?: SocketCommand | null;
+  hostName?: string;
 }
 
-export function GuestPlayer({ queue, currentSongIndex, isPlaying, serverProgress, socketCommand }: GuestPlayerProps) {
+export function GuestPlayer({ queue, currentSongIndex, isPlaying, serverProgress, socketCommand, hostName }: GuestPlayerProps) {
   const [played, setPlayed] = useState(0);
+  const [duration, setDuration] = useState(0);
   const playerRef = useRef<any>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const [playerReady, setPlayerReady] = useState(false);
@@ -69,7 +73,7 @@ export function GuestPlayer({ queue, currentSongIndex, isPlaying, serverProgress
     new window.YT.Player(containerRef.current, {
       height: '200',
       width: '200',
-      videoId: currentSong?.url?.split('v=')[1]?.split('&')[0] || '',
+      videoId: getYouTubeVideoId(currentSong?.url || ''),
       playerVars: {
         autoplay: 0,
         controls: 0,
@@ -83,6 +87,11 @@ export function GuestPlayer({ queue, currentSongIndex, isPlaying, serverProgress
           // Store canonical instance from event.target
           playerRef.current = event.target as any;
           setPlayerInstanceReady(true);
+
+          const readyDuration = playerRef.current?.getDuration?.();
+          if (readyDuration && readyDuration > 0) {
+            setDuration(readyDuration);
+          }
 
           if (isPlaying) {
             playerRef.current?.playVideo();
@@ -150,6 +159,7 @@ export function GuestPlayer({ queue, currentSongIndex, isPlaying, serverProgress
         const currentTime = playerRef.current.getCurrentTime();
         const duration = playerRef.current.getDuration();
         if (duration > 0) {
+          setDuration((prev) => (Math.abs(prev - duration) > 0.5 ? duration : prev));
           setPlayed(currentTime / duration);
         }
       }
@@ -159,43 +169,16 @@ export function GuestPlayer({ queue, currentSongIndex, isPlaying, serverProgress
   }, [isPlaying, playerInstanceReady]);
 
   return (
-    <div className="w-full flex flex-col items-center bg-surface p-6 rounded-[24px] border border-border-subtle shadow-lg mt-6">
+    <>
       <div ref={containerRef} style={{ position: 'absolute', left: '-9999px', top: '-9999px', width: '200px', height: '200px' }} />
-
-      {currentSong ? (
-        <>
-          <h3 className="text-lg font-bold text-primary text-center mb-1 line-clamp-1">{currentSong.title}</h3>
-          <p className="text-sm text-secondary mb-4">Now Playing</p>
-
-          {/* Progress Bar */}
-          <div className="w-full h-1 bg-border-subtle rounded-full overflow-hidden mb-6">
-            <div
-              className="h-full bg-accent transition-all duration-300 ease-linear"
-              style={{ width: `${played * 100}%` }}
-            />
-          </div>
-
-          {/* Queue List */}
-          {queue.length > 1 && (
-            <div className="w-full mt-4 pt-4 border-t border-border-subtle">
-              <h4 className="text-sm font-semibold text-secondary mb-3">Up Next</h4>
-              <div className="space-y-2">
-                {queue.slice(currentSongIndex + 1).map((song, index) => (
-                  <div
-                    key={song.id}
-                    className="flex items-center gap-3 p-2 rounded-lg bg-background/50 hover:bg-background/70 transition-colors"
-                  >
-                    <span className="text-xs text-secondary w-5">{index + 1}</span>
-                    <span className="text-sm text-primary flex-1 truncate">{song.title}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </>
-      ) : (
-        <p className="text-secondary text-center">No song in queue</p>
-      )}
-    </div>
+      <NowPlayingStage
+        variant="guest"
+        currentSong={currentSong ?? null}
+        isPlaying={isPlaying}
+        played={played}
+        duration={duration}
+        hostName={hostName}
+      />
+    </>
   );
 }

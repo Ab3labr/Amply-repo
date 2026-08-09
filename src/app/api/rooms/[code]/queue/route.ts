@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { roomsStore, QueueItem } from "@/lib/store";
+import { getYouTubeThumbnailUrl } from "@/lib/youtube";
 
 type Params = Promise<{ code: string }>;
 
@@ -37,6 +38,7 @@ export async function POST(
       id: `song-${Date.now()}`,
       url,
       title,
+      thumbnailUrl: getYouTubeThumbnailUrl(url),
     };
 
     room.queue.push(newItem);
