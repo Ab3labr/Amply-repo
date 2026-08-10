@@ -7,6 +7,7 @@ import { HostPlayer } from "@/components/ui/HostPlayer";
 import { HostPlayerErrorBoundary } from "@/components/ui/HostPlayerErrorBoundary";
 import { RoomData } from "@/lib/store";
 import { diag, nextSeq } from "@/lib/sync-diag";
+import { startClockSync, stopClockSync } from "@/lib/clock-sync";
 import { useState, useEffect, useRef, use } from "react";
 import { useRouter } from "next/navigation";
 import { io, type Socket } from "socket.io-client";
@@ -39,6 +40,7 @@ export default function HostRoomPage({ params }: { params: Promise<{ code: strin
         console.log(`[HOST SOCKET] connected id=${socket.id}`);
         socket.emit("JOIN_ROOM", { roomCode: code, role: "host" });
         socket.emit("ROOM_SYNC", { roomCode: code, message: "sync-test", timestamp: Date.now() });
+        startClockSync(socket, code);
       } catch (error) {
         console.error('[HOST SOCKET] Error in connect handler:', error);
       }
@@ -91,6 +93,7 @@ export default function HostRoomPage({ params }: { params: Promise<{ code: strin
       } catch (error) {
         console.error('[HOST PAGE] Error disconnecting socket:', error);
       }
+      stopClockSync();
     };
   }, [code]);
 

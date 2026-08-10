@@ -13,6 +13,19 @@ declare global {
   }
 }
 
+const YT_STATE_NAMES: Record<number, string> = {
+  [-1]: "UNSTARTED",
+  [0]: "ENDED",
+  [1]: "PLAYING",
+  [2]: "PAUSED",
+  [3]: "BUFFERING",
+  [5]: "CUED",
+};
+
+function ytStateName(state: number): string {
+  return YT_STATE_NAMES[state] ?? `UNKNOWN(${state})`;
+}
+
 export interface SocketCommand {
   type: "play" | "pause";
   at: number;
@@ -40,6 +53,7 @@ export function GuestPlayer({ roomCode, queue, currentSongIndex, isPlaying, serv
   // Generation counter: a replaced player's late callbacks (onReady/onError)
   // must never re-arm the ready flag with a stale/dead instance.
   const playerGenerationRef = useRef<number>(0);
+  const prevVideoIdRef = useRef<string | null>(null);
   const lastDiagPlayRef = useRef<boolean | null>(null);
 
   const currentSong = queue[currentSongIndex];
@@ -62,6 +76,15 @@ export function GuestPlayer({ roomCode, queue, currentSongIndex, isPlaying, serv
 
   // Initialize player
   useEffect(() => {
+    const initVideoId = getYouTubeVideoId(currentSong?.url || '');
+    diag("PLAYER", roomCode, "player", "effect-deps-ran", {
+      role: "guest",
+      videoId: initVideoId || null,
+      prevVideoId: prevVideoIdRef.current,
+      index: currentSongIndex,
+      willRecreate: !!playerRef.current,
+    });
+
     if (!playerReady || !containerRef.current) return;
 
     const generation = playerGenerationRef.current + 1;
@@ -69,13 +92,25 @@ export function GuestPlayer({ roomCode, queue, currentSongIndex, isPlaying, serv
 
     if (playerRef.current) {
       diag("GUEST", roomCode, "player", "destroy", {});
+      diag("PLAYER", roomCode, "player", "destroy", {
+        role: "guest",
+        videoId: prevVideoIdRef.current ?? null,
+      });
       playerRef.current.destroy();
       playerRef.current = null;
       setPlayerInstanceReady(false);
     }
 
     // Create the player but do NOT rely on the constructor return value.
+    const guestVideoId = getYouTubeVideoId(currentSong?.url || '');
     diag("GUEST", roomCode, "player", "create", { index: currentSongIndex });
+    diag("PLAYER", roomCode, "player", "create", {
+      role: "guest",
+      videoId: guestVideoId,
+      prevVideoId: prevVideoIdRef.current,
+      index: currentSongIndex,
+    });
+    prevVideoIdRef.current = guestVideoId || null;
     new window.YT.Player(containerRef.current, {
       height: '200',
       width: '200',
@@ -94,6 +129,7 @@ export function GuestPlayer({ roomCode, queue, currentSongIndex, isPlaying, serv
           playerRef.current = event.target as any;
           setPlayerInstanceReady(true);
           diag("GUEST", roomCode, "player", "onReady", { index: currentSongIndex });
+          diag("PLAYER", roomCode, "player", "ready", { role: "guest", videoId: guestVideoId, index: currentSongIndex });
 
           const readyDuration = playerRef.current?.getDuration?.();
           if (readyDuration && readyDuration > 0) {
@@ -102,13 +138,31 @@ export function GuestPlayer({ roomCode, queue, currentSongIndex, isPlaying, serv
 
           if (isPlaying) {
             diag("GUEST", roomCode, "PLAY", "autoplay-playVideo", { cause: "onReady" });
+            diag("PLAYER", roomCode, "play", "request", { role: "guest", cause: "onReady-autoplay", videoId: guestVideoId });
             playerRef.current?.playVideo();
           }
         },
         onStateChange: (event: any) => {
           if (playerGenerationRef.current !== generation) return;
           diag("GUEST", roomCode, "yt-state", String(event.data), { index: currentSongIndex });
-          if (event.data === window.YT.PlayerState.PLAYING) {
+          {
+            let liveVideoId: string | null = null;
+            try {
+              liveVideoId = playerRef.current?.getVideoData?.()?.video_id ?? null;
+            } catch {
+              liveVideoId = null;
+            }
+            diag("PLAYER", roomCode, "player", "state", {
+              role: "guest",
+              state: ytStateName(event.data),
+              rawState: event.data,
+              videoId: liveVideoId,
+              index: currentSongIndex,
+            });
+          }
+          if (event.data === window.YT.PlayerState.ENDED) {
+            diag("GUEST", roomCode, "ENDED", "yt-ended", { index: currentSongIndex });
+          } else if (event.data === window.YT.PlayerState.PLAYING) {
             diag("GUEST", roomCode, "PLAY", "yt-playing", {});
             setTimeout(() => {
               if (playerRef.current && playerGenerationRef.current === generation) {
@@ -134,6 +188,10 @@ export function GuestPlayer({ roomCode, queue, currentSongIndex, isPlaying, serv
         playerRef.current.destroy();
       }
       diag("GUEST", roomCode, "player", "destroy-cleanup", {});
+      diag("PLAYER", roomCode, "player", "cleanup", {
+        role: "guest",
+        videoId: prevVideoIdRef.current ?? null,
+      });
       playerRef.current = null;
       setPlayerInstanceReady(false);
     };
@@ -141,8 +199,18 @@ export function GuestPlayer({ roomCode, queue, currentSongIndex, isPlaying, serv
 
   // Control playback
   useEffect(() => {
-    if (!playerRef.current || !playerInstanceReady) return;
+    if (!playerRef.current || !playerInstanceReady) {
+      diag("PLAYER", roomCode, isPlaying ? "play" : "pause", "ignored-not-ready", {
+        role: "guest",
+        cause: "poll-effect",
+      });
+      return;
+    }
 
+    diag("PLAYER", roomCode, isPlaying ? "play" : "pause", "request", {
+      role: "guest",
+      cause: "poll-effect",
+    });
     if (isPlaying) {
       if (lastDiagPlayRef.current !== true) {
         diag("GUEST", roomCode, "PLAY", "effect-playVideo", { cause: "poll" });
@@ -161,8 +229,21 @@ export function GuestPlayer({ roomCode, queue, currentSongIndex, isPlaying, serv
   // Execute host-issued play/pause commands relayed over Socket.IO.
   // HTTP polling remains the reconciliation mechanism for state.
   useEffect(() => {
-    if (!socketCommand || !playerRef.current || !playerInstanceReady) return;
+    if (!socketCommand) return;
+    if (!playerRef.current || !playerInstanceReady) {
+      diag("PLAYER", roomCode, socketCommand.type, "ignored-not-ready", {
+        role: "guest",
+        cause: "socket-command",
+        seq: socketCommand.seq ?? null,
+      });
+      return;
+    }
 
+    diag("PLAYER", roomCode, socketCommand.type, "request", {
+      role: "guest",
+      cause: "socket-command",
+      seq: socketCommand.seq ?? null,
+    });
     if (socketCommand.type === "play") {
       diag("GUEST", roomCode, "PLAY", "playVideo()", { seq: socketCommand.seq });
       playerRef.current.playVideo?.();
@@ -184,6 +265,12 @@ export function GuestPlayer({ roomCode, queue, currentSongIndex, isPlaying, serv
           from: played,
           to: serverProgress,
           delta: +(Math.abs(played - serverProgress) * 100).toFixed(2) + "%",
+        });
+        diag("PLAYER", roomCode, "seek", "apply", {
+          role: "guest",
+          cause: "drift-correction",
+          fraction: serverProgress,
+          positionSec: serverProgress * duration,
         });
         playerRef.current.seekTo(serverProgress * duration, true);
       }

@@ -6,6 +6,7 @@ import { Toast } from "@/components/ui/Toast";
 import { GuestPlayer, type SocketCommand } from "@/components/ui/GuestPlayer";
 import { RoomData } from "@/lib/store";
 import { diag } from "@/lib/sync-diag";
+import { startClockSync, stopClockSync } from "@/lib/clock-sync";
 import { useState, useEffect, useRef, use } from "react";
 import { useRouter } from "next/navigation";
 import { io, type Socket } from "socket.io-client";
@@ -27,6 +28,7 @@ export default function GuestRoomPage({ params }: { params: Promise<{ code: stri
     socket.on("connect", () => {
       console.log(`[GUEST SOCKET] connected id=${socket.id}`);
       socket.emit("JOIN_ROOM", { roomCode: code, role: "guest" });
+      startClockSync(socket, code);
     });
 
     socket.on("disconnect", () => {
@@ -61,6 +63,7 @@ export default function GuestRoomPage({ params }: { params: Promise<{ code: stri
 
     return () => {
       socket.disconnect();
+      stopClockSync();
     };
   }, [code]);
 

@@ -21,7 +21,7 @@ export function nextSeq(): number {
   return seqCounter;
 }
 
-export type SyncTag = "HOST" | "GUEST" | "SERVER" | "POLL" | "YT";
+export type SyncTag = "HOST" | "GUEST" | "SERVER" | "POLL" | "YT" | "CLOCK" | "PLAYER";
 
 /**
  * Emit a one-line structured diagnostic.

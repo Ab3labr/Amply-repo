@@ -13,6 +13,19 @@ declare global {
   }
 }
 
+const YT_STATE_NAMES: Record<number, string> = {
+  [-1]: "UNSTARTED",
+  [0]: "ENDED",
+  [1]: "PLAYING",
+  [2]: "PAUSED",
+  [3]: "BUFFERING",
+  [5]: "CUED",
+};
+
+function ytStateName(state: number): string {
+  return YT_STATE_NAMES[state] ?? `UNKNOWN(${state})`;
+}
+
 interface HostPlayerProps {
   code: string;
   queue: QueueItem[];
@@ -39,6 +52,7 @@ export function HostPlayer({ code, queue, currentSongIndex, isPlaying, onPlay, o
     // new player was created, so they must be ignored to avoid re-arming the
     // player with a stale/dead instance.
     const playerGenerationRef = useRef<number>(0);
+    const prevVideoIdRef = useRef<string | null>(null);
 
     // Debouncing refs for progress sync
     const lastSyncTimeRef = useRef<number>(0);
@@ -103,6 +117,15 @@ export function HostPlayer({ code, queue, currentSongIndex, isPlaying, onPlay, o
     });
 
     try {
+      const initVideoId = getYouTubeVideoId(currentSong?.url || '');
+      diag("PLAYER", code, "player", "effect-deps-ran", {
+        role: "host",
+        videoId: initVideoId || null,
+        prevVideoId: prevVideoIdRef.current,
+        index: currentSongIndex,
+        willRecreate: !!playerRef.current,
+      });
+
       if (!playerReady || !containerRef.current) return;
 
       // Bump the generation for this player creation. Any callback from a
@@ -113,6 +136,10 @@ export function HostPlayer({ code, queue, currentSongIndex, isPlaying, onPlay, o
       if (playerRef.current) {
         console.log('[HostPlayer] Destroying existing player instance');
         diag("HOST", code, "player", "destroy", {});
+        diag("PLAYER", code, "player", "destroy", {
+          role: "host",
+          videoId: prevVideoIdRef.current ?? null,
+        });
         try {
           playerRef.current.destroy();
         } catch (error) {
@@ -125,6 +152,13 @@ export function HostPlayer({ code, queue, currentSongIndex, isPlaying, onPlay, o
       const videoId = getYouTubeVideoId(currentSong?.url || '');
       console.log('[HostPlayer] Creating new YouTube player with videoId:', videoId);
       diag("HOST", code, "player", "create", { videoId, index: currentSongIndex });
+      diag("PLAYER", code, "player", "create", {
+        role: "host",
+        videoId,
+        prevVideoId: prevVideoIdRef.current,
+        index: currentSongIndex,
+      });
+      prevVideoIdRef.current = videoId || null;
 
       // Create the player but do not use the constructor return value as the
       // canonical instance. The YT API provides the canonical instance via
@@ -149,6 +183,7 @@ export function HostPlayer({ code, queue, currentSongIndex, isPlaying, onPlay, o
               }
               console.log('[HostPlayer] YouTube onReady event fired');
               diag("HOST", code, "player", "onReady", { index: currentSongIndex });
+              diag("PLAYER", code, "player", "ready", { role: "host", videoId, index: currentSongIndex, gen: generation });
               // Store the canonical YT.Player instance from event.target
               playerRef.current = event.target as any;
               setPlayerInstanceReady(true);
@@ -170,6 +205,11 @@ export function HostPlayer({ code, queue, currentSongIndex, isPlaying, onPlay, o
                     if (duration > 0) {
                       playerRef.current.seekTo(room.progress * duration, true);
                       setPlayed(room.progress);
+                      diag("PLAYER", code, "seek", "apply", {
+                        role: "host",
+                        cause: "recovery",
+                        positionSec: room.progress * duration,
+                      });
                     }
                   }
                 })
@@ -180,6 +220,7 @@ export function HostPlayer({ code, queue, currentSongIndex, isPlaying, onPlay, o
               if (isPlaying) {
                 console.log('[HostPlayer] Auto-playing video (isPlaying=true)');
                 diag("HOST", code, "PLAY", "autoplay-playVideo", { cause: "onReady" });
+                diag("PLAYER", code, "play", "request", { role: "host", cause: "onReady-autoplay", videoId });
                 try {
                   playerRef.current?.playVideo();
                 } catch (error) {
@@ -198,6 +239,21 @@ export function HostPlayer({ code, queue, currentSongIndex, isPlaying, onPlay, o
               }
               console.log('[HostPlayer] YouTube onStateChange event:', event.data);
               diag("HOST", code, "yt-state", String(event.data), { index: currentSongIndex });
+              {
+                let liveVideoId: string | null = null;
+                try {
+                  liveVideoId = playerRef.current?.getVideoData?.()?.video_id ?? null;
+                } catch {
+                  liveVideoId = null;
+                }
+                diag("PLAYER", code, "player", "state", {
+                  role: "host",
+                  state: ytStateName(event.data),
+                  rawState: event.data,
+                  videoId: liveVideoId,
+                  index: currentSongIndex,
+                });
+              }
               if (event.data === window.YT.PlayerState.ENDED) {
                 console.log('[HostPlayer] Song ended, calling handleNext');
                 diag("HOST", code, "ENDED", "yt-ended", { index: currentSongIndex });
@@ -230,6 +286,10 @@ export function HostPlayer({ code, queue, currentSongIndex, isPlaying, onPlay, o
         console.error('[HostPlayer] Error destroying player in cleanup:', error);
       }
       diag("HOST", code, "player", "destroy-cleanup", {});
+      diag("PLAYER", code, "player", "cleanup", {
+        role: "host",
+        videoId: prevVideoIdRef.current ?? null,
+      });
       playerRef.current = null;
       setPlayerInstanceReady(false);
     };
@@ -244,8 +304,18 @@ export function HostPlayer({ code, queue, currentSongIndex, isPlaying, onPlay, o
     });
 
     try {
-      if (!playerRef.current || !playerInstanceReady) return;
+      if (!playerRef.current || !playerInstanceReady) {
+        diag("PLAYER", code, isPlaying ? "play" : "pause", "ignored-not-ready", {
+          role: "host",
+          cause: "poll-effect",
+        });
+        return;
+      }
 
+      diag("PLAYER", code, isPlaying ? "play" : "pause", "request", {
+        role: "host",
+        cause: "poll-effect",
+      });
       if (isPlaying) {
         console.log('[HostPlayer] Calling playVideo()');
         if (lastDiagPlayRef.current !== true) {
@@ -347,6 +417,7 @@ export function HostPlayer({ code, queue, currentSongIndex, isPlaying, onPlay, o
       // `isPlaying`. This keeps the host aligned with guests (who react to the
       // socket relay instantly) and prevents drift-correction from yanking
       // guests backward during the old poll lag.
+      diag("PLAYER", code, isPlaying ? "pause" : "play", "request", { role: "host", cause: "click", seq });
       if (playerRef.current && playerInstanceReady) {
         try {
           if (isPlaying) {
@@ -361,6 +432,8 @@ export function HostPlayer({ code, queue, currentSongIndex, isPlaying, onPlay, o
           seq,
           dyMs: +(performance.now() - clickAt).toFixed(2),
         });
+      } else {
+        diag("PLAYER", code, isPlaying ? "pause" : "play", "ignored-not-ready", { role: "host", cause: "click" });
       }
 
       if (isPlaying) {
@@ -397,11 +470,15 @@ export function HostPlayer({ code, queue, currentSongIndex, isPlaying, onPlay, o
   const handleSeek = (fraction: number) => {
     // UI-only seek: drive the host's own player directly and relay the position
     // through the existing onSeek callback (Socket.IO SEEK). No new sync path.
-    if (!playerRef.current || !playerInstanceReady) return;
+    if (!playerRef.current || !playerInstanceReady) {
+      diag("PLAYER", code, "seek", "ignored-not-ready", { role: "host", cause: "click" });
+      return;
+    }
 
     const seq = nextSeq();
     const seekStart = performance.now();
     diag("HOST", code, "SEEK", "click", { seq, fraction, played });
+    diag("PLAYER", code, "seek", "request", { role: "host", cause: "click", seq, fraction });
     let position = 0;
     try {
       const dur = playerRef.current.getDuration?.();
@@ -411,6 +488,7 @@ export function HostPlayer({ code, queue, currentSongIndex, isPlaying, onPlay, o
       playerRef.current.seekTo(position, true);
       setPlayed(clamped);
       diag("HOST", code, "SEEK", "seekTo()", { seq, position, dyMs: +(performance.now() - seekStart).toFixed(2) });
+      diag("PLAYER", code, "seek", "apply", { role: "host", positionSec: position, seq });
     } catch (error) {
       console.error('[HostPlayer] Error in handleSeek:', error);
       return;
@@ -431,11 +509,13 @@ export function HostPlayer({ code, queue, currentSongIndex, isPlaying, onPlay, o
     const seq = nextSeq();
     const clickAt = performance.now();
     diag("HOST", code, "NEXT", "click", { seq });
+    diag("PLAYER", code, "next", "request", { role: "host", seq });
 
     // Defensive guard: don't proceed if player is being destroyed/recreated
     if (!playerRef.current || !playerInstanceReady) {
       console.warn('[HostPlayer] handleNext called but player not ready, skipping');
       diag("HOST", code, "NEXT", "skip-not-ready", { seq });
+      diag("PLAYER", code, "next", "ignored-not-ready", { role: "host", seq });
       return;
     }
 
@@ -482,11 +562,13 @@ export function HostPlayer({ code, queue, currentSongIndex, isPlaying, onPlay, o
     const seq = nextSeq();
     const clickAt = performance.now();
     diag("HOST", code, "PREVIOUS", "click", { seq });
+    diag("PLAYER", code, "previous", "request", { role: "host", seq });
 
     // Defensive guard: don't proceed if player is being destroyed/recreated
     if (!playerRef.current || !playerInstanceReady) {
       console.warn('[HostPlayer] handlePrevious called but player not ready, skipping');
       diag("HOST", code, "PREVIOUS", "skip-not-ready", { seq });
+      diag("PLAYER", code, "previous", "ignored-not-ready", { role: "host", seq });
       return;
     }
 

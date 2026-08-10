@@ -94,6 +94,25 @@ app.prepare().then(() => {
       diag('SERVER', roomCode, 'SEEK', 'broadcast', { seq: seq ?? null, position: position ?? null, serverSentAt: broadcastAt });
     });
 
+    // ─── CLOCK_SYNC ───────────────────────────────────────────────────────
+    // NTP-style time exchange (Phase 1). Client emits with an ack callback:
+    //   client perf.now t0 ----emit CLOCK_SYNC---->  receive at t1 (server)
+    //   <----ack({t1, t2})---- (t2 = send time, server) ---->  client t3
+    // The client derives rtt + clock offset. This is session-only; nothing is
+    // persisted.
+    socket.on("CLOCK_SYNC", (payload, ack) => {
+      const roomCode = payload?.roomCode || null;
+      const t1 = Date.now();
+      if (typeof ack === "function") {
+        ack({ t1, t2: Date.now() });
+      }
+      diag("CLOCK", roomCode, "CLOCK_SYNC", "respond", {
+        sample: payload?.sample ?? null,
+        t1,
+        t2: Date.now(),
+      });
+    });
+
     // ─── LOAD_VIDEO ───────────────────────────────────────────────────────
     // Host sends URL → server resets ready state and broadcasts to all.
     socket.on('LOAD_VIDEO', ({ url }) => {
